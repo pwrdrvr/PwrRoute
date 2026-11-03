@@ -128,7 +128,7 @@ pub fn load(cx: &mut App) {
             model.configuration = configuration;
             model.pending.remove(&super::Pane::ShortLinks);
             if let Some(field) = model.configuration.everything_else.as_mut() {
-                field.problem = problem;
+                if problem.is_some() { field.problem = problem; }
             }
         },
     );
@@ -933,8 +933,8 @@ fn settle(
             return;
         }
         let mut configuration = read(cx);
-        if let (Err(reason), Some(field)) = (saved, configuration.everything_else.as_mut()) {
-            field.problem = Some(not_saved(&reason).into());
+        if let Some(field) = configuration.everything_else.as_mut() {
+            field.problem = saved.err().map(|reason| not_saved(&reason).into());
         }
         settings::update(cx, move |model| model.configuration = configuration);
         super::system_host::refresh_diagnostics(cx);

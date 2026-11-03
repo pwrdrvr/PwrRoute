@@ -99,6 +99,10 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
     apps
 }
 
+type ScanCallback = Rc<dyn Fn(&mut App)>;
+#[cfg(test)]
+type ScanProducer = std::sync::Arc<dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<DetectedApp>> + Send>> + Send + Sync>;
+
 /// The scan, once it has run, and the machine it reads.
 struct ScanGlobal {
     env: Env,
@@ -106,16 +110,9 @@ struct ScanGlobal {
     error: Option<String>,
     running: bool,
     again: bool,
-    callbacks: Vec<Rc<dyn Fn(&mut App)>>,
+    callbacks: Vec<ScanCallback>,
     #[cfg(test)]
-    producer: Option<
-        std::sync::Arc<
-            dyn Fn()
-                    -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<DetectedApp>> + Send>>
-                + Send
-                + Sync,
-        >,
-    >,
+    producer: Option<ScanProducer>,
 }
 
 impl Global for ScanGlobal {}
@@ -134,6 +131,11 @@ pub fn install(env: Env, cx: &mut App) {
         #[cfg(test)]
         producer: None,
     });
+    on_complete(cx, Rc::new(|cx| {
+        refresh_windows(cx);
+        crate::settings::reload(cx, crate::settings::Pane::Configuration);
+        crate::settings::reload(cx, crate::settings::Pane::Sync);
+    }));
 }
 
 /// A scan a test or screenshot supplies, in place of reading the machine.
@@ -175,7 +177,7 @@ pub fn is_loading(cx: &App) -> bool {
 
 /// Register once per consumer, during installation. Called on GPUI after each
 /// completed scan, including the initial one; never from the scanning thread.
-pub fn on_complete(cx: &mut App, callback: Rc<dyn Fn(&mut App)>) {
+pub fn on_complete(cx: &mut App, callback: ScanCallback) {
     if !cx.has_global::<ScanGlobal>() {
         install(environment(), cx);
     }
@@ -235,10 +237,7 @@ fn start(cx: &mut App, force: bool) {
                 start(cx, true);
                 return;
             }
-            refresh_windows(cx);
             crate::settings::reload(cx, crate::settings::Pane::Browsers);
-            crate::settings::reload(cx, crate::settings::Pane::Configuration);
-            crate::settings::reload(cx, crate::settings::Pane::Sync);
             for callback in callbacks {
                 callback(cx);
             }

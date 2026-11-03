@@ -663,7 +663,7 @@ impl LogsWindow {
 
     fn copy_with_diagnostics(
         &self,
-        diagnostics: impl std::future::Future<Output = String> + 'static,
+        diagnostics: impl std::future::Future<Output = Result<String, String>> + 'static,
         generation: u64,
         out: String,
         note: String,
@@ -675,8 +675,13 @@ impl LogsWindow {
                 if view.copy_generation != generation {
                     return;
                 }
-                cx.write_to_clipboard(ClipboardItem::new_string(format!("{report}{out}")));
-                view.set_note(note, cx);
+                match report {
+                    Ok(report) => {
+                        cx.write_to_clipboard(ClipboardItem::new_string(format!("{report}{out}")));
+                        view.set_note(note, cx);
+                    }
+                    Err(error) => view.set_note(format!("Not copied: {error}"), cx),
+                }
             });
         })
         .detach();
@@ -1973,7 +1978,7 @@ mod tests {
             logs.copy_generation += 1;
             cx.write_to_clipboard(ClipboardItem::new_string("newer".into()));
         });
-        release.try_send("diagnostics\n".into()).unwrap();
+        release.try_send(Ok("diagnostics\n".into())).unwrap();
         cx.run_until_parked();
         assert_eq!(
             cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))

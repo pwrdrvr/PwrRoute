@@ -76,6 +76,16 @@ impl State {
         }
     }
 
+    /// Update saved values without replacing an unsubmitted numeric draft.
+    pub fn refresh(&mut self, before: &Privacy, after: &Privacy) {
+        if self.count.text == before.keep_count.to_string() {
+            self.count.set(after.keep_count.to_string());
+        }
+        if self.hours.text == before.keep_hours.to_string() {
+            self.hours.set(after.keep_hours.to_string());
+        }
+    }
+
     /// The sheet that is open, for tests.
     #[cfg(test)]
     pub fn sheet(&self) -> Option<Sheet> {
@@ -84,6 +94,27 @@ impl State {
 
     pub fn close_sheet(&mut self) {
         self.sheet = None;
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[gpui_kit::test]
+    fn loaded_values_refresh_untouched_fields_and_keep_a_draft(cx: &mut gpui_kit::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| SettingsWindow::new(
+            crate::settings::fixtures::model(), std::rc::Rc::new(|_, _, _| {}), cx));
+        view.update(cx, |view, _| {
+            let before = view.model.privacy.clone();
+            view.privacy.count.set("draft");
+            let mut after = before.clone();
+            after.keep_count = 321;
+            after.keep_hours = 72;
+            view.privacy.refresh(&before, &after);
+            assert_eq!(view.privacy.count.text, "draft");
+            assert_eq!(view.privacy.hours.text, "72");
+        });
     }
 }
 

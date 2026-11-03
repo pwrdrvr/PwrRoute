@@ -56,8 +56,33 @@ impl State {
         }
     }
 
+    pub fn refresh(&mut self, before: &str, after: &str) {
+        if self.name.text == before { self.name.set(after); }
+    }
+
     pub fn close(&mut self) {
         self.editing = None;
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[gpui_kit::test]
+    fn the_initial_name_arrives_without_overwriting_a_later_draft(cx: &mut gpui_kit::TestAppContext) {
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let mut model = crate::settings::fixtures::model();
+            model.sync.machine_name = "".into();
+            SettingsWindow::new(model, std::rc::Rc::new(|_, _, _| {}), cx)
+        });
+        view.update(cx, |view, _| {
+            view.sync.refresh("", "Fixture computer");
+            assert_eq!(view.sync.name.text, "Fixture computer");
+            view.sync.name.set("A draft");
+            view.sync.refresh("Fixture computer", "Another computer");
+            assert_eq!(view.sync.name.text, "A draft");
+        });
     }
 }
 

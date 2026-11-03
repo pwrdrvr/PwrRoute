@@ -478,10 +478,11 @@ fn load_future<T: Send + 'static>(
                 view.model.problems.remove(&pane);
                 match result {
                     Ok(value) => {
+                        let before_privacy = view.model.privacy.clone();
+                        let before_name = view.model.sync.machine_name.clone();
                         apply(&mut view.model, value, cx);
-                        if pane == Pane::Privacy {
-                            view.privacy = privacy::State::new(&view.model.privacy, cx);
-                        }
+                        view.privacy.refresh(&before_privacy, &view.model.privacy);
+                        view.sync.refresh(&before_name, &view.model.sync.machine_name);
                     }
                     Err(error) => {
                         view.model.problems.insert(pane, error.into());
