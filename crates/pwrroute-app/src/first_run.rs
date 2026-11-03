@@ -200,6 +200,13 @@ pub enum ImportOutcome {
     /// Closed without importing: the step comes back as it was.
     Cancelled,
     Imported(Imported),
+    /// A source choice was saved; only this reply completes Keep/Don't use.
+    Chosen(ImportChoice),
+    /// Rules may already be saved, but the source or onboarding answer is not.
+    Failed {
+        imported: Option<Imported>,
+        reason: String,
+    },
 }
 
 /// How the window hears back from an import it started.
@@ -224,7 +231,8 @@ pub struct FirstRunModel {
     pub rules_import_status: Option<String>,
     pub copying_rules: bool,
     pub import: Option<ImportChoice>,
-    /// The importer is open, from "Import N rules".
+    pub import_error: Option<String>,
+    /// A config choice is awaiting its reply, including an open importer.
     pub importing: bool,
     /// What a finished import left behind.
     pub imported: Option<Imported>,
@@ -1073,8 +1081,8 @@ pub struct FirstRunHooks {
     /// The segmented control: who owns everything else while a config is
     /// in charge (`rules.json`'s `precedence`).
     pub on_precedence: Save<Precedence>,
-    /// The config step's answer. Keep and Don't use it are done at once;
-    /// Import opens the importer, and the reply says how it was left.
+    /// The config step's answer. Every choice waits for its persisted
+    /// result; Import opens the importer before answering.
     pub on_import: ImportHook,
     pub on_import_rules: RulesImportHook,
     /// "Look again": the browsers on this machine, read again.
@@ -1342,10 +1350,8 @@ impl FirstRun {
             return;
         }
         let reply = self.import_reply(window, cx);
-        match choice {
-            ImportChoice::Import => self.model.importing = true,
-            ImportChoice::KeepFile | ImportChoice::DontUse => self.model.import = Some(choice),
-        }
+        self.model.importing = true;
+        self.model.import_error = None;
         (self.hooks.on_import)(choice, reply, cx);
         cx.notify();
     }
@@ -1376,7 +1382,22 @@ impl FirstRun {
             return;
         }
         self.model.importing = false;
-        if let ImportOutcome::Imported(done) = outcome {
+        let done = match outcome {
+            ImportOutcome::Cancelled => None,
+            ImportOutcome::Chosen(choice) => {
+                self.model.import = Some(choice);
+                None
+            }
+            ImportOutcome::Imported(done) => {
+                self.model.import = Some(ImportChoice::Import);
+                Some(done)
+            }
+            ImportOutcome::Failed { imported, reason } => {
+                self.model.import_error = Some(reason);
+                imported
+            }
+        };
+        if let Some(done) = done {
             if !done.default_browser.is_empty() {
                 let label = label_for(
                     &self.model.browsers,
@@ -1389,7 +1410,6 @@ impl FirstRun {
                 }
             }
             self.model.rules = done.rules;
-            self.model.import = Some(ImportChoice::Import);
             self.model.imported = Some(done);
         }
         cx.notify();
@@ -2178,7 +2198,10 @@ fn config_body(model: &FirstRunModel, state: StepState, cx: &mut Context<'_, Fir
         .flex()
         .flex_col()
         .gap(px(8.0))
-        .child(tagged_paragraph(model.config_detail(), &config.path));
+        .child(tagged_paragraph(model.config_detail(), &config.path))
+        .when_some(model.import_error.clone(), |body, reason| {
+            body.child(error_line(reason))
+        });
     if state != StepState::Current || model.importing {
         return body;
     }
@@ -3215,9 +3238,12 @@ mod tests {
                 precedences.borrow_mut().push(precedence);
                 Ok(())
             }),
-            on_import: Rc::new(move |choice, reply, _| {
+            on_import: Rc::new(move |choice, reply, cx| {
                 imports.borrow_mut().push(choice);
-                replies.borrow_mut().push(reply);
+                replies.borrow_mut().push(reply.clone());
+                if choice != ImportChoice::Import {
+                    cx.defer(move |cx| reply(ImportOutcome::Chosen(choice), cx));
+                }
             }),
             on_rescan: Rc::new(move |_| {
                 rescans.set(rescans.get() + 1);

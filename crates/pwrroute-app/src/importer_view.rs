@@ -16,8 +16,10 @@
 //! Import then writes `rules.json` through the main window's store only
 //! when that window is already open (never opening it), and the importer
 //! tells first run how it was left, through its [`OnDone`]: imported, with
-//! the count, or cancelled however it closed.
+//! the count and any source-save error, or cancelled before rules were saved.
+//! A source-save retry keeps the saved stage and never imports the rules again.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -61,6 +63,7 @@ pub const CANCEL_ID: &str = "importer-cancel";
 pub const ALL_ID: &str = "importer-all";
 pub const SUGGESTION_ID: &str = "importer-suggestion";
 pub const UNDO_ID: &str = "importer-undo";
+pub const SOURCE_RETRY_ID: &str = "source-retry";
 pub const NOTICE_REVIEW_ID: &str = "importer-notice-review";
 pub const NOTICE_DISMISS_ID: &str = "importer-notice-dismiss";
 
@@ -92,6 +95,9 @@ pub struct ImportDone {
     pub previous_source: Option<SourceSettings>,
     /// Undo is good until the next edit to `rules.json`.
     pub undoable: bool,
+    /// Rules were restored, but restoring the durable source may need retry.
+    pub rules_restored: bool,
+    pub problem: Option<String>,
 }
 
 /// A config discovery found while visual rules are in charge (1a).
@@ -104,7 +110,7 @@ pub struct FoundConfig {
 }
 
 /// How the importer first run opened was left.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportOutcome {
     /// It closed without importing: Cancel, its close button, Choose
     /// another file with no file chosen, the window failing to open, or
@@ -112,7 +118,30 @@ pub enum ImportOutcome {
     Cancelled,
     /// `count` rules written. `keeps_config`: Choose source kept the config
     /// in charge; otherwise the router stopped reading it.
-    Imported { count: usize, keeps_config: bool },
+    Imported {
+        count: usize,
+        keeps_config: bool,
+        source_error: Option<String>,
+    },
+}
+
+/// The rules half has committed. A source retry reuses this count and
+/// never writes rules.json or replaces the original Undo snapshot again.
+#[derive(Clone, Debug)]
+struct SavedImport {
+    count: usize,
+    keeps_config: bool,
+    source_error: Option<String>,
+}
+
+impl SavedImport {
+    fn outcome(self) -> ImportOutcome {
+        ImportOutcome::Imported {
+            count: self.count,
+            keeps_config: self.keeps_config,
+            source_error: self.source_error,
+        }
+    }
 }
 
 /// What first run hears back from the importer.
@@ -124,7 +153,14 @@ pub type OnDone = Rc<dyn Fn(ImportOutcome, &mut App)>;
 struct FromFirstRun {
     rules: Option<PathBuf>,
     on_done: OnDone,
+    session: ImportSession,
 }
+
+/// A first-run import can close after saving rules but before saving its
+/// source. Its next attempt resumes that source stage with the same model
+/// and count, even if every imported rule is now a duplicate.
+#[derive(Clone, Default)]
+pub(crate) struct ImportSession(Rc<RefCell<Option<(ImportModel, SavedImport)>>>);
 
 /// The main window, when one is open.
 fn main_window(cx: &App) -> Option<WindowHandle<PwrRoute>> {
@@ -177,18 +213,32 @@ pub(crate) fn open_with(path: PathBuf, first_run: bool, in_charge: Option<PathBu
 /// window is never opened for it), and `on_done` hears how the importer was
 /// left.
 pub fn open_from_first_run(path: PathBuf, rules: Option<PathBuf>, on_done: OnDone, cx: &mut App) {
+    open_from_first_run_session(path, rules, on_done, ImportSession::default(), cx);
+}
+
+pub(crate) fn open_from_first_run_session(
+    path: PathBuf,
+    rules: Option<PathBuf>,
+    on_done: OnDone,
+    session: ImportSession,
+    cx: &mut App,
+) {
+    let retry = session.0.borrow_mut().take();
+    let from = FromFirstRun {
+        rules,
+        on_done,
+        session,
+    };
+    if let Some((model, saved)) = retry {
+        show_attempt(model, Some(from), Some(saved), cx);
+        return;
+    }
     let in_charge = if path.extension().is_some_and(|ext| ext == "json") {
         crate::router::config_in_charge()
     } else {
         Some(path.clone())
     };
-    open_inner(
-        path,
-        true,
-        in_charge,
-        Some(FromFirstRun { rules, on_done }),
-        cx,
-    );
+    open_inner(path, true, in_charge, Some(from), cx);
 }
 
 fn open_inner(
@@ -231,13 +281,31 @@ fn open_inner(
 }
 
 /// Shows `model` in the importer, opening it when none is open. An open
-/// importer first run was waiting on answers it was cancelled.
+/// importer first run was waiting on reports either cancellation or its
+/// already-saved rules and outstanding source error.
 fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) {
+    show_attempt(model, from_first_run, None, cx);
+}
+
+fn show_attempt(
+    model: ImportModel,
+    from_first_run: Option<FromFirstRun>,
+    saved: Option<SavedImport>,
+    cx: &mut App,
+) {
+    if let Some(from) = &from_first_run {
+        *from.session.0.borrow_mut() = saved.clone().map(|saved| (model.clone(), saved));
+    }
     if let Some(window) = importer_window(cx) {
         let _ = window.update(cx, |this, window, cx| {
             this.model = model;
+            let earlier_outcome = this
+                .saved
+                .take()
+                .map_or(ImportOutcome::Cancelled, SavedImport::outcome);
+            this.saved = saved;
             if let Some(earlier) = std::mem::replace(&mut this.from_first_run, from_first_run) {
-                cx.defer(move |cx| (earlier.on_done)(ImportOutcome::Cancelled, cx));
+                cx.defer(move |cx| (earlier.on_done)(earlier_outcome, cx));
             }
             crate::menu_bar::bring_forward(window, cx);
             cx.notify();
@@ -246,6 +314,9 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
         return;
     }
     let failed = from_first_run.as_ref().map(|from| from.on_done.clone());
+    let failed_outcome = saved
+        .clone()
+        .map_or(ImportOutcome::Cancelled, SavedImport::outcome);
     let display = crate::placement::display_for_new_window(cx);
     let bounds = Bounds::centered(
         display,
@@ -269,6 +340,7 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
             cx.new(|cx| {
                 let mut importer = Importer::new(model, cx);
                 importer.from_first_run = from_first_run;
+                importer.saved = saved;
                 importer
             })
         },
@@ -282,7 +354,7 @@ fn show(model: ImportModel, from_first_run: Option<FromFirstRun>, cx: &mut App) 
         Err(error) => {
             log::warn!("could not open the importer: {error}");
             if let Some(on_done) = failed {
-                cx.defer(move |cx| on_done(ImportOutcome::Cancelled, cx));
+                cx.defer(move |cx| on_done(failed_outcome, cx));
             }
         }
     }
@@ -294,15 +366,20 @@ pub struct Importer {
     pub focus: FocusHandle,
     menu_bar: Entity<MenuBar>,
     /// First run opened it and waits to hear how it is left. Taken by
-    /// Import; still here when the window goes, which is a cancel.
+    /// Import; on close it reports cancellation or the saved partial stage.
     from_first_run: Option<FromFirstRun>,
+    saved: Option<SavedImport>,
 }
 
 impl Importer {
     pub fn new(model: ImportModel, cx: &mut Context<'_, Self>) -> Self {
         cx.on_release(|this: &mut Self, cx| {
             if let Some(from) = this.from_first_run.take() {
-                (from.on_done)(ImportOutcome::Cancelled, cx);
+                let outcome = this
+                    .saved
+                    .take()
+                    .map_or(ImportOutcome::Cancelled, SavedImport::outcome);
+                (from.on_done)(outcome, cx);
             }
         })
         .detach();
@@ -311,6 +388,7 @@ impl Importer {
             focus: cx.focus_handle(),
             menu_bar: MenuBar::listed("Import Finicky Config", cx),
             from_first_run: None,
+            saved: None,
         }
     }
 
@@ -354,27 +432,29 @@ impl Importer {
         let mut model = self.model.clone();
         model.refused = None;
         let from_first_run = self.from_first_run.take();
+        let saved_count = self.saved.take().map(|saved| saved.count);
         window.remove_window();
-        cx.defer(move |cx| match from_first_run {
-            None => {
-                if let Err(reason) = finish(&model, cx) {
-                    model.refused = Some(reason);
-                    show(model, None, cx);
+        cx.defer(move |cx| {
+            let result = match &from_first_run {
+                None => finish(&model, saved_count, cx),
+                Some(from) => finish_for_first_run(&model, from.rules.clone(), saved_count, cx),
+            };
+            match result {
+                Ok(saved) if saved.source_error.is_some() => {
+                    model.refused.clone_from(&saved.source_error);
+                    show_attempt(model, from_first_run, Some(saved), cx);
                 }
-            }
-            Some(from) => match finish_for_first_run(&model, from.rules.clone(), cx) {
-                Ok(count) => (from.on_done)(
-                    ImportOutcome::Imported {
-                        count,
-                        keeps_config: model.final_source() == SourceChoice::KeepConfig,
-                    },
-                    cx,
-                ),
+                Ok(saved) => {
+                    if let Some(from) = from_first_run {
+                        from.session.0.borrow_mut().take();
+                        (from.on_done)(saved.outcome(), cx);
+                    }
+                }
                 Err(reason) => {
                     model.refused = Some(reason);
-                    show(model, Some(from), cx);
+                    show(model, from_first_run, cx);
                 }
-            },
+            }
         });
     }
 
@@ -424,24 +504,31 @@ fn prompt_for(from_first_run: Option<FromFirstRun>, cx: &mut App) {
 /// on Rules when none is), then switches the router's source as Choose
 /// source said. The source changes only when the write went through; a
 /// refused write comes back as the reason.
-pub fn finish(model: &ImportModel, cx: &mut App) -> Result<(), String> {
+fn finish(
+    model: &ImportModel,
+    saved_count: Option<usize>,
+    cx: &mut App,
+) -> Result<SavedImport, String> {
     if main_window(cx).is_none()
         && let Some(host) = cx.try_global::<ImporterHost>().cloned()
     {
         (host.show_rules)(cx);
     }
     let main = main_window(cx).ok_or("No PwrRoute window to import into.")?;
-    let previous_source =
-        settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
-    main.update(cx, |app, window, cx| {
-        app.navigate(Screen::Rules, window, cx);
-        app.apply_import(model, previous_source.clone(), cx)
-    })
-    .map_err(|error| format!("{error:#}"))??;
-    if let Some(config) = switch_source(model, cx) {
-        let _ = main.update(cx, |app, _, cx| app.set_config(config, cx));
-    }
-    Ok(())
+    let count = match saved_count {
+        Some(count) => count,
+        None => {
+            let previous_source =
+                settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+            main.update(cx, |app, window, cx| {
+                app.navigate(Screen::Rules, window, cx);
+                app.apply_import(model, previous_source, cx)?;
+                Ok::<_, String>(app.last_import.as_ref().map_or(0, |done| done.count))
+            })
+            .map_err(|error| format!("{error:#}"))??
+        }
+    };
+    Ok(finish_source(model, count, cx))
 }
 
 /// First run's Import: writes the import through the main window's store
@@ -452,10 +539,12 @@ pub fn finish(model: &ImportModel, cx: &mut App) -> Result<(), String> {
 fn finish_for_first_run(
     model: &ImportModel,
     rules: Option<PathBuf>,
+    saved_count: Option<usize>,
     cx: &mut App,
-) -> Result<usize, String> {
-    let count = match main_window(cx) {
-        Some(main) => {
+) -> Result<SavedImport, String> {
+    let count = match (saved_count, main_window(cx)) {
+        (Some(count), _) => count,
+        (None, Some(main)) => {
             let previous_source =
                 settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
             main.update(cx, |app, _, cx| {
@@ -464,7 +553,7 @@ fn finish_for_first_run(
             })
             .map_err(|error| format!("{error:#}"))??
         }
-        None => {
+        (None, None) => {
             let mut store = RulesStore::load(rules);
             if let Some(reason) = store.save_refused() {
                 return Err(reason);
@@ -476,68 +565,107 @@ fn finish_for_first_run(
             plan.count()
         }
     };
-    if let Some(config) = switch_source(model, cx)
-        && let Some(main) = main_window(cx)
-    {
-        let _ = main.update(cx, |app, _, cx| app.set_config(config, cx));
-    }
-    Ok(count)
+    Ok(finish_source(model, count, cx))
 }
 
-/// Saves the source Choose source picked (`ImportModel::source_after`) and
-/// hands it to the router. Keep never touches it, so a file that is not
-/// the config in charge never takes its place. Returns the config now in
-/// charge when that changed; `None` when nothing did, or there is no
-/// settings store (the window harness).
-fn switch_source(model: &ImportModel, cx: &mut App) -> Option<Option<PathBuf>> {
-    let store = settings_store::store(cx)?;
+fn finish_source(model: &ImportModel, count: usize, cx: &mut App) -> SavedImport {
+    let result = switch_source(model, cx);
+    let source_error = result.err().map(|reason| format!(
+        "{} saved to rules.json. {reason} Retry saving the source; the rules will not be imported again.",
+        plural(count, "rule")
+    ));
+    if let Some(main) = main_window(cx) {
+        let problem = source_error.clone();
+        let _ = main.update(cx, |app, _, cx| {
+            if let Some(done) = &mut app.last_import {
+                done.problem = problem;
+            }
+            cx.notify();
+        });
+    }
+    SavedImport {
+        count,
+        keeps_config: model.final_source() == SourceChoice::KeepConfig,
+        source_error,
+    }
+}
+
+/// The source stage always attempts persistence, even when runtime settings
+/// already equal the choice after an earlier failed write. JSON copies do
+/// not change the source.
+fn switch_source(model: &ImportModel, cx: &mut App) -> Result<(), String> {
+    if model.rules_file.is_some() {
+        return Ok(());
+    }
+    let Some(store) = settings_store::store(cx) else {
+        return Err("No settings store: the source choice was not saved.".to_owned());
+    };
     let current = store.read(cx).settings().source.clone();
-    let wanted = model.source_after(&current);
-    if wanted == current && !model.stops_config() {
-        return None;
-    }
-    set_source(wanted, cx)
+    set_source_and_show(model.source_after(&current), cx)
 }
 
-/// Saves `source` to `settings.json` and switches the router to it.
-/// Returns the config it puts in charge. First run's Don't use it calls it
-/// with `visualOnly`.
-pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> Option<Option<PathBuf>> {
-    let store = settings_store::store(cx)?;
+#[derive(Clone)]
+struct SourceNotice {
+    source: SourceSettings,
+    reason: String,
+}
+
+impl Global for SourceNotice {}
+
+/// The source applied to this session, together with its persistence result.
+/// SettingsStore deliberately retains edits on failure; callers must show
+/// that distinction and must not infer durability from runtime equality.
+pub(crate) struct SourceApplied {
+    pub config: Option<PathBuf>,
+    pub saved: Result<(), String>,
+}
+
+pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> SourceApplied {
     let choice = source.choice(discovery::config_candidates(
         &discovery::Environment::current(),
     ));
-    store.update(cx, |store, _| {
-        if let Err(error) = store.update(|settings| settings.source = source) {
-            log::warn!("cannot save the rules source: {error:#}");
-        }
-    });
+    let saved = match settings_store::store(cx) {
+        Some(store) => store.update(cx, |store, _| {
+            store.update(|settings| settings.source = source.clone())
+                .map_err(|error| format!("Source is used for this session only: {error:#}. The previous source may return after restart."))
+        }),
+        None => Err("No settings store: the source choice was not saved.".to_owned()),
+    };
     let config = match &choice {
         ConfigChoice::None => None,
         ConfigChoice::Path(path) => Some(path.canonicalize().unwrap_or_else(|_| path.clone())),
         ConfigChoice::Discover(candidates) => discovery::find_config(candidates),
     };
-    crate::router::choose_source(choice, settings_store::router(cx).as_ref());
-    Some(config)
+    // A harness with a private store has no resident router. Avoid changing
+    // process-wide routing state on its behalf.
+    if let Some(router) = settings_store::router(cx) {
+        crate::router::choose_source(choice, Some(&router));
+    }
+    match &saved {
+        Ok(()) => {
+            if cx.has_global::<SourceNotice>() {
+                cx.remove_global::<SourceNotice>();
+            }
+        }
+        Err(reason) => cx.set_global(SourceNotice {
+            source,
+            reason: reason.clone(),
+        }),
+    }
+    SourceApplied { config, saved }
 }
 
-/// [`set_source`], then the open main window shown the config now in
-/// charge, as the importer's own switch does. First run's Don't use it.
-pub(crate) fn set_source_and_show(source: SourceSettings, cx: &mut App) {
-    if let Some(config) = set_source(source, cx)
-        && let Some(main) = main_window(cx)
-    {
-        let _ = main.update(cx, |app, _, cx| app.set_config(config, cx));
+pub(crate) fn set_source_and_show(source: SourceSettings, cx: &mut App) -> Result<(), String> {
+    let applied = set_source(source, cx);
+    if let Some(main) = main_window(cx) {
+        let _ = main.update(cx, |app, _, cx| app.set_config(applied.config, cx));
     }
+    applied.saved
 }
 
-/// Undo import's source half: the source before the import, when it
-/// changed.
-pub fn restore_source(source: SourceSettings, cx: &mut App) -> Option<Option<PathBuf>> {
-    let store = settings_store::store(cx)?;
-    if store.read(cx).settings().source == source {
-        return None;
-    }
+/// Always retry the durable write, even if a failed restore already put
+/// this source into runtime settings.
+pub(crate) fn restore_source(source: SourceSettings, cx: &mut App) -> SourceApplied {
     set_source(source, cx)
 }
 
@@ -643,28 +771,92 @@ fn banner_text(title: String, body: String) -> Div {
 /// a config found while visual rules are in charge (1a).
 pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div> {
     let mut banners = Vec::new();
+    if app
+        .last_import
+        .as_ref()
+        .is_none_or(|done| done.problem.is_none())
+        && let Some(notice) = cx.try_global::<SourceNotice>().cloned()
+    {
+        banners.push(
+            banner_frame(theme::status_error(), theme::danger_soft())
+                .debug_selector(|| "source-not-saved".into())
+                .child(banner_text(
+                    "Source choice not saved".to_owned(),
+                    notice.reason,
+                ))
+                .child(
+                    small_button(SOURCE_RETRY_ID, "Retry saving source", false)
+                        .map(crate::accessibility::clickable)
+                        .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                            let applied = set_source(notice.source.clone(), cx);
+                            this.set_config(applied.config, cx);
+                        })),
+                ),
+        );
+    }
     if let Some(done) = &app.last_import {
         let saved = clock(done.at);
-        let mut body = format!("{} Saved {saved}; reloaded.", done.outcome);
+        let mut body = match &done.problem {
+            Some(problem) => problem.clone(),
+            None => format!("{} Saved {saved}; reloaded.", done.outcome),
+        };
         if done.suggestions > 0 {
             body.push_str(&format!(" {} from a suggestion.", done.suggestions));
         }
         let file = done.file.clone();
+        let source_retry = cx
+            .try_global::<SourceNotice>()
+            .cloned()
+            .filter(|_| done.problem.is_some() && !done.rules_restored);
         let actions = div()
             .flex()
             .flex_none()
             .items_center()
             .gap(px(8.0))
+            .when_some(source_retry, |row, notice| {
+                row.child(small_button(SOURCE_RETRY_ID, "Retry saving source", false)
+                    .map(crate::accessibility::clickable)
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        let applied = set_source(notice.source.clone(), cx);
+                        this.set_config(applied.config, cx);
+                        if let Some(done) = &mut this.last_import {
+                            done.problem = applied.saved.err();
+                        }
+                        cx.notify();
+                    })))
+            })
             .when(done.undoable, |row| {
                 row.child(
-                    small_button(UNDO_ID, "Undo import", false)
+                    small_button(UNDO_ID, if done.rules_restored { "Retry restoring source" } else { "Undo import" }, false)
                         .map(crate::accessibility::clickable)
                         .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
-                            if let Some(source) = this.undo_import(cx)
-                                && let Some(config) = restore_source(source, cx)
-                            {
-                                this.set_config(config, cx);
+                            match this.undo_import(cx) {
+                                Ok(source) if this.last_import.as_ref().is_some_and(|done| done.rules_restored) => {
+                                    let saved = match source {
+                                        Some(source) => {
+                                            let applied = restore_source(source, cx);
+                                            this.set_config(applied.config, cx);
+                                            applied.saved
+                                        }
+                                        None => Ok(()),
+                                    };
+                                    match saved {
+                                        Ok(()) => this.last_import = None,
+                                        Err(reason) => {
+                                            if let Some(done) = &mut this.last_import {
+                                                done.problem = Some(format!("Rules restored. {reason} Retry restoring the source."));
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(reason) => {
+                                    if let Some(done) = &mut this.last_import {
+                                        done.problem = Some(format!("Undo import was not saved: {reason}"));
+                                    }
+                                }
+                                _ => {}
                             }
+                            cx.notify();
                         })),
                 )
             })
@@ -679,18 +871,46 @@ pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div>
                 )
             });
         banners.push(
-            banner_frame(theme::accent_border(), theme::bg_row_active())
-                .debug_selector(|| "import-done".into())
-                .child(text("\u{2713}", 16.0, 700.0, theme::accent()))
-                .child(banner_text(
+            banner_frame(
+                if done.problem.is_some() {
+                    theme::status_error()
+                } else {
+                    theme::accent_border()
+                },
+                if done.problem.is_some() {
+                    theme::danger_soft()
+                } else {
+                    theme::bg_row_active()
+                },
+            )
+            .debug_selector(|| "import-done".into())
+            .child(text(
+                if done.problem.is_some() {
+                    "!"
+                } else {
+                    "\u{2713}"
+                },
+                16.0,
+                700.0,
+                if done.problem.is_some() {
+                    theme::danger_text()
+                } else {
+                    theme::accent()
+                },
+            ))
+            .child(banner_text(
+                if done.rules_restored {
+                    "Rules restored; source needs attention".to_owned()
+                } else {
                     format!(
                         "Imported {} from {}",
                         plural(done.count, "rule"),
                         done.shown
-                    ),
-                    body,
-                ))
-                .child(actions),
+                    )
+                },
+                body,
+            ))
+            .child(actions),
         );
     }
     if app.last_import.is_none()
@@ -1749,7 +1969,11 @@ fn place(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
 
 /// 3a: what the router reads afterwards. The choice is about the config
 /// in charge, which need not be the file under review.
-fn choose_source(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Stateful<Div> {
+fn choose_source(
+    model: &ImportModel,
+    locked: bool,
+    cx: &mut Context<'_, Importer>,
+) -> Stateful<Div> {
     let behind = model.left_behind();
     let plan = model.plan(&model.existing);
     let stays = behind.len();
@@ -1825,11 +2049,14 @@ fn choose_source(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Statefu
                 model.source == choice,
                 lines,
             )
+            .when(locked, |slot| slot.opacity(theme::DISABLED))
             .map(crate::accessibility::clickable)
             .map(|element| crate::accessibility::radio(element, model.source == choice))
             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                this.model.source = choice;
-                cx.notify();
+                if !locked {
+                    this.model.source = choice;
+                    cx.notify();
+                }
             })),
         );
     }
@@ -1904,7 +2131,7 @@ fn rules_review(model: &ImportModel) -> Stateful<Div> {
 }
 
 /// `.imp-foot`: the summary and the step's buttons.
-fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
+fn footer(model: &ImportModel, saved: Option<&SavedImport>, cx: &mut Context<'_, Importer>) -> Div {
     let plan = model.plan(&model.existing);
     let summary = match model.step {
         Step::Review if model.rules_file.is_some() => {
@@ -1914,15 +2141,20 @@ fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
         Step::Place => "Rewrites go after yours, since every rewrite runs anyway.".to_owned(),
         Step::Source => model.plan_summary(&plan),
     };
-    let next_label: SharedString = match model.next_step() {
-        Some(Step::Place) => "Next: Place".into(),
-        Some(Step::Source) => "Next: Choose source".into(),
-        _ if model.rules_file.is_some() => "Copy rules".into(),
-        _ => model.import_label(&plan).into(),
+    let next_label: SharedString = if saved.is_some() {
+        "Retry saving source".into()
+    } else {
+        match model.next_step() {
+            Some(Step::Place) => "Next: Place".into(),
+            Some(Step::Source) => "Next: Choose source".into(),
+            _ if model.rules_file.is_some() => "Copy rules".into(),
+            _ => model.import_label(&plan).into(),
+        }
     };
-    let first = model.step == Step::Review;
+    let first = model.step == Step::Review || saved.is_some();
     let can_go = model.problem.is_none()
-        && (model.next_step().is_some()
+        && (saved.is_some()
+            || model.next_step().is_some()
             || plan.count() > 0
             || (model.rules_file.is_some() && plan.file != model.existing));
     div()
@@ -1950,12 +2182,7 @@ fn footer(model: &ImportModel, cx: &mut Context<'_, Importer>) -> Div {
                     Some(reason) => row.child(
                         div()
                             .debug_selector(|| "importer-refused".into())
-                            .child(text(
-                                format!("Nothing was imported: {reason}"),
-                                11.5,
-                                500.0,
-                                theme::danger_text(),
-                            )),
+                            .child(text(reason.clone(), 11.5, 500.0, theme::danger_text())),
                     ),
                     None => row.child(text(summary, 11.5, 500.0, theme::text_secondary())),
                 }),
@@ -2004,7 +2231,9 @@ impl Render for Importer {
                 .child(detail(&model, cx))
                 .into_any_element(),
             (None, Step::Place) => place(&model, cx).into_any_element(),
-            (None, Step::Source) => choose_source(&model, cx).into_any_element(),
+            (None, Step::Source) => {
+                choose_source(&model, self.saved.is_some(), cx).into_any_element()
+            }
         };
         div()
             .id(ROOT_ID)
@@ -2036,6 +2265,6 @@ impl Render for Importer {
                     .flex()
                     .child(body),
             )
-            .child(footer(&model, cx))
+            .child(footer(&model, self.saved.as_ref(), cx))
     }
 }

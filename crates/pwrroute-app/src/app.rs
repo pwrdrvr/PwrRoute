@@ -709,12 +709,16 @@ impl PwrRoute {
         let previous = self.store.written();
         model.validate_target(self.store.path(), &previous)?;
         let plan = model.plan(&previous);
+        let before = self.store.clone();
         self.store.replace_all(plan.file.clone());
-        let saved = self.store.save();
+        if let Err(reason) = self.store.save() {
+            // The importer owns this staged edit. A retry must start from
+            // the same rules and keep the original Undo snapshot.
+            self.store = before;
+            self.reloaded(cx);
+            return Err(reason);
+        }
         self.reloaded(cx);
-        // A write that failed leaves the edit on screen with the reason, as
-        // any other failed save does.
-        saved?;
         self.found_config = None;
         self.last_import = Some(ImportDone {
             shown: model.shown.clone(),
@@ -727,6 +731,8 @@ impl PwrRoute {
             previous,
             previous_source,
             undoable: true,
+            rules_restored: false,
+            problem: None,
         });
         cx.notify();
         Ok(())
@@ -735,21 +741,36 @@ impl PwrRoute {
     /// Undo import: `rules.json` as it was before, in one save. Returns the
     /// source to restore once that save went through. Another writer's
     /// change since the import ends Undo instead of being overwritten.
-    pub fn undo_import(&mut self, cx: &mut Context<'_, Self>) -> Option<SourceSettings> {
+    pub fn undo_import(
+        &mut self,
+        cx: &mut Context<'_, Self>,
+    ) -> Result<Option<SourceSettings>, String> {
         let disk = self.sync_with_disk(cx);
-        let undoable = self.last_import.as_ref()?.undoable;
-        if !undoable || disk != Disk::Unchanged || self.store.save_refused().is_some() {
+        let Some(done) = &self.last_import else {
+            return Ok(None);
+        };
+        if !done.undoable || disk != Disk::Unchanged || self.store.save_refused().is_some() {
             if let Some(done) = &mut self.last_import {
                 done.undoable = false;
             }
             cx.notify();
-            return None;
+            return Ok(None);
         }
-        let done = self.last_import.take()?;
-        self.store.replace_all(done.previous);
-        let saved = self.store.save();
-        self.reloaded(cx);
-        saved.ok().and(done.previous_source)
+        let done = done.clone();
+        if !done.rules_restored {
+            let before = self.store.clone();
+            self.store.replace_all(done.previous);
+            if let Err(reason) = self.store.save() {
+                self.store = before;
+                self.reloaded(cx);
+                return Err(reason);
+            }
+            self.reloaded(cx);
+            if let Some(done) = &mut self.last_import {
+                done.rules_restored = true;
+            }
+        }
+        Ok(done.previous_source)
     }
 
     /// The config in charge changed (the importer's Choose source, or its

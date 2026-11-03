@@ -3237,6 +3237,8 @@ fn the_banners_import_button_opens_the_importer(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn an_import_writes_rules_json_once_and_undo_takes_it_back(cx: &mut TestAppContext) {
     let dir = scratch("import");
+    let settings = crate::settings_store::SettingsStore::load(Some(dir.clone()));
+    cx.update(|cx| crate::settings_store::install(settings, None, cx));
     let path = dir.join("rules.json");
     let (view, cx) = open_store(cx, None, fixture_store(&dir));
     let before = RulesFile::load(&path).unwrap();
@@ -3311,6 +3313,147 @@ fn an_import_writes_rules_json_once_and_undo_takes_it_back(cx: &mut TestAppConte
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[gpui_kit::test]
+fn import_source_retry_is_available_after_closing_the_partial_importer(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let rules = dir.path().join("rules.json");
+    let config = importer_config();
+    let mut settings = crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+    settings
+        .update(|settings| settings.source.config = Some(config.clone()))
+        .unwrap();
+    cx.update(|cx| crate::settings_store::install(settings, None, cx));
+    let (view, cx) = open_store(cx, Some(config.clone()), fixture_store(dir.path()));
+    let before = RulesFile::load(&rules).unwrap();
+    std::fs::create_dir(dir.path().join("settings.json.saving")).unwrap();
+    cx.cx
+        .update(|cx| crate::importer_view::open_with(config.clone(), true, Some(config), cx));
+    let window = importer_window(cx).unwrap();
+    window
+        .update(&mut cx.cx, |view, _, _| {
+            view.model.source = crate::importer::SourceChoice::VisualOnly
+        })
+        .unwrap();
+    let mut importer = VisualTestContext::from_window(window.into(), &cx.cx);
+    draw(&mut importer);
+    let button = importer
+        .debug_bounds(crate::importer_view::NEXT_ID)
+        .unwrap();
+    importer.simulate_click(button.center(), Modifiers::default());
+    let window = importer_window(cx).expect("source save was refused");
+    window
+        .update(&mut cx.cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    let written = std::fs::read(&rules).unwrap();
+    let done = view
+        .read_with(cx, |app, _| app.last_import.clone())
+        .unwrap();
+    assert!(done.problem.as_ref().unwrap().contains("session only"));
+    assert_eq!(done.previous, before);
+    assert!(done.count > 0);
+    std::fs::create_dir(dir.path().join("rules.json.saving")).unwrap();
+    std::fs::remove_dir(dir.path().join("settings.json.saving")).unwrap();
+    click(cx, crate::importer_view::SOURCE_RETRY_ID);
+    let after = view
+        .read_with(cx, |app, _| app.last_import.clone())
+        .unwrap();
+    assert!(after.problem.is_none());
+    assert_eq!(after.count, done.count);
+    assert_eq!(after.previous, before);
+    assert_eq!(std::fs::read(&rules).unwrap(), written);
+    assert!(
+        crate::settings_store::Settings::load(dir.path())
+            .unwrap()
+            .source
+            .visual_only
+    );
+}
+
+/// Neither an import save nor either half of Undo may consume the
+/// original snapshot on a transient file-save failure.
+#[gpui_kit::test]
+fn import_and_undo_retry_each_file_stage_without_losing_the_snapshot(cx: &mut TestAppContext) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rules.json");
+    let config = importer_config();
+    let mut settings = crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+    settings
+        .update(|settings| settings.source.config = Some(config.clone()))
+        .unwrap();
+    let original_source = settings.settings().source.clone();
+    cx.update(|cx| crate::settings_store::install(settings, None, cx));
+    let (view, cx) = open_store(cx, Some(config.clone()), fixture_store(dir.path()));
+    let before = RulesFile::load(&path).unwrap();
+    let mut model =
+        crate::importer::ImportModel::read(&config, None, Some(&config), &[], before.clone());
+    model.start_at_source();
+    model.source = crate::importer::SourceChoice::VisualOnly;
+    let blocker = dir.path().join("rules.json.saving");
+    std::fs::create_dir(&blocker).unwrap();
+    let saved = view.update(cx, |app, cx| {
+        app.apply_import(&model, Some(original_source.clone()), cx)
+    });
+    assert!(saved.is_err());
+    assert_eq!(RulesFile::load(&path).unwrap(), before);
+    assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
+    assert!(view.read_with(cx, |app, _| app.last_import.is_none()));
+    std::fs::remove_dir(&blocker).unwrap();
+    view.update(cx, |app, cx| {
+        app.apply_import(&model, Some(original_source.clone()), cx)
+    })
+    .unwrap();
+    let imported = RulesFile::load(&path).unwrap();
+    assert!(imported.rules.len() > before.rules.len());
+    assert_eq!(
+        view.read_with(cx, |app, _| app
+            .last_import
+            .as_ref()
+            .unwrap()
+            .previous
+            .clone()),
+        before
+    );
+    cx.update(|_, cx| {
+        crate::importer_view::set_source_and_show(model.source_after(&original_source), cx)
+    })
+    .unwrap();
+    std::fs::create_dir(&blocker).unwrap();
+    click(cx, crate::importer_view::UNDO_ID);
+    assert_eq!(RulesFile::load(&path).unwrap(), imported);
+    assert!(view.read_with(cx, |app, _| {
+        let done = app.last_import.as_ref().unwrap();
+        done.undoable && !done.rules_restored && done.problem.is_some()
+    }));
+    // Restore rules, but fail the source restore. Runtime agrees with the
+    // choice; the disk still has visualOnly until the next retry.
+    std::fs::remove_dir(&blocker).unwrap();
+    std::fs::create_dir(dir.path().join("settings.json.saving")).unwrap();
+    click(cx, crate::importer_view::UNDO_ID);
+    assert_eq!(RulesFile::load(&path).unwrap(), before);
+    assert!(view.read_with(cx, |app, _| {
+        app.last_import.as_ref().unwrap().rules_restored
+    }));
+    assert!(
+        crate::settings_store::Settings::load(dir.path())
+            .unwrap()
+            .source
+            .visual_only
+    );
+    let restored = std::fs::read(&path).unwrap();
+    std::fs::create_dir(&blocker).unwrap();
+    std::fs::remove_dir(dir.path().join("settings.json.saving")).unwrap();
+    click(cx, crate::importer_view::UNDO_ID);
+    assert!(view.read_with(cx, |app, _| app.last_import.is_none()));
+    assert_eq!(std::fs::read(&path).unwrap(), restored);
+    assert_eq!(
+        crate::settings_store::Settings::load(dir.path())
+            .unwrap()
+            .source,
+        original_source
+    );
+}
+
 /// File › Import Finicky Config… on a file that is not the config in
 /// charge: Choose source names the one in charge, and Keep leaves
 /// `settings.json`'s source as it was.
@@ -3380,7 +3523,7 @@ fn importing_a_file_not_in_charge_keeps_the_config_in_charge(cx: &mut TestAppCon
     };
     other.save(&path).unwrap();
     let restored = view.update(cx, |app, cx| app.undo_import(cx));
-    assert_eq!(restored, None);
+    assert_eq!(restored, Ok(None));
     assert_eq!(RulesFile::load(&path).unwrap(), other);
     let undoable = view.read_with(cx, |app, _| {
         app.last_import.as_ref().map(|done| done.undoable)
@@ -5051,6 +5194,38 @@ mod rules_and_config_views {
         assert!(cx.debug_bounds("handler-0").is_some());
         assert!(cx.debug_bounds("import-found").is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[gpui_kit::test]
+    fn stop_using_shows_session_only_until_its_source_retry_saves(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = fixture_home().join(".finicky.ts");
+        let mut settings =
+            crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+        settings
+            .update(|settings| settings.source.config = Some(config.clone()))
+            .unwrap();
+        cx.update(|cx| crate::settings_store::install(settings, None, cx));
+        let (view, cx) = open_store(cx, Some(config), fixture_store(dir.path()));
+        std::fs::create_dir(dir.path().join("settings.json.saving")).unwrap();
+        click(cx, config_view::STOP_ID);
+        assert!(view.read_with(cx, |app, _| app.config.is_none()));
+        assert!(
+            !crate::settings_store::Settings::load(dir.path())
+                .unwrap()
+                .source
+                .visual_only
+        );
+        assert!(cx.debug_bounds("source-not-saved").is_some());
+        std::fs::remove_dir(dir.path().join("settings.json.saving")).unwrap();
+        click(cx, crate::importer_view::SOURCE_RETRY_ID);
+        assert!(
+            crate::settings_store::Settings::load(dir.path())
+                .unwrap()
+                .source
+                .visual_only
+        );
+        assert!(cx.debug_bounds("source-not-saved").is_none());
     }
 
     /// First run's Don't use it while the main window is open: the real
