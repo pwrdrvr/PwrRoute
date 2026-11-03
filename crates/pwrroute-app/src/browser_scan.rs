@@ -101,8 +101,8 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
 
 type ScanCallback = Rc<dyn Fn(&mut App)>;
 #[cfg(test)]
-type ScanProducer = std::sync::Arc<
-    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<DetectedApp>> + Send>>
+pub(crate) type ScanProducer = std::sync::Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<DetectedApp>, String>> + Send>>
         + Send
         + Sync,
 >;
@@ -157,6 +157,13 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
         callbacks: Vec::new(),
         producer: None,
     });
+}
+
+/// Replace only the worker for channel-controlled lifecycle tests. Install a
+/// fixture environment or cached apps first; setting this never starts a scan.
+#[cfg(test)]
+pub(crate) fn set_test_producer(cx: &mut App, producer: ScanProducer) {
+    cx.update_global(|scan: &mut ScanGlobal, _| scan.producer = Some(producer));
 }
 
 /// The last completed scan, starting the initial scan if needed. Before
@@ -214,7 +221,7 @@ fn start(cx: &mut App, force: bool) {
     let work = cx.background_executor().spawn(async move {
         #[cfg(test)]
         if let Some(producer) = producer {
-            return Ok(producer().await);
+            return producer().await;
         }
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self::scan(&env)))
             .map_err(|_| "Could not scan browsers. Try again.".to_owned())
@@ -391,23 +398,21 @@ mod tests {
         let observed = completed.clone();
         cx.update(|cx| {
             install(env, cx);
-            cx.update_global(|scan: &mut ScanGlobal, _| {
-                scan.producer = Some(Arc::new(move || {
+            set_test_producer(cx, Arc::new(move || {
                     let index = calls.fetch_add(1, Ordering::SeqCst);
                     let wait = wait.clone();
                     Box::pin(async move {
                         wait.recv().await.unwrap();
-                        vec![DetectedApp {
+                        Ok(vec![DetectedApp {
                             name: format!("Browser {index}"),
                             bundle_id: None,
                             location: "/fixture/browser".into(),
                             profiles: vec![],
                             directories: vec![],
                             profiles_blocked: false,
-                        }]
+                        }])
                     })
-                }))
-            });
+                }));
             on_complete(cx, Rc::new(move |_| observed.set(observed.get() + 1)));
             assert!(apps(cx).is_empty());
             assert!(choices(cx).is_empty());
@@ -466,6 +471,44 @@ mod tests {
         }
         let env = Env::fixture(Platform::MacOs, dir.path());
         (dir, env)
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_rescan_notifies_consumers_keeps_cached_apps_and_can_retry(cx: &mut gpui_kit::TestAppContext) {
+        let completed = Rc::new(std::cell::Cell::new(0));
+        let observed = completed.clone();
+        let (release, wait) = async_channel::bounded(2);
+        cx.update(|cx| {
+            install_fixture(vec![DetectedApp { name: "Cached browser".into(), bundle_id: None,
+                location: "/fixture/browser".into(), profiles: vec![], directories: vec![], profiles_blocked: false }], cx);
+            set_test_producer(cx, std::sync::Arc::new(move || {
+                let wait = wait.clone();
+                Box::pin(async move { wait.recv().await.unwrap() })
+            }));
+            on_complete(cx, Rc::new(move |_| observed.set(observed.get() + 1)));
+            rescan(cx);
+            assert!(is_loading(cx));
+            assert_eq!(apps(cx)[0].name, "Cached browser");
+        });
+        cx.run_until_parked();
+        release.try_send(Err("Fixture scan blocked".into())).unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(!is_loading(cx));
+            assert_eq!(error(cx).as_deref(), Some("Fixture scan blocked"));
+            assert_eq!(apps(cx)[0].name, "Cached browser");
+        });
+        assert_eq!(completed.get(), 1, "failure is a completion consumers must observe");
+        cx.update(|cx| { rescan(cx); });
+        release.try_send(Ok(Vec::new())).unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(!is_loading(cx));
+            assert!(error(cx).is_none());
+            assert!(has_run(cx));
+            assert!(apps(cx).is_empty(), "a completed empty scan is a result");
+        });
+        assert_eq!(completed.get(), 2);
     }
 
     #[test]
