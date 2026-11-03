@@ -163,6 +163,7 @@ fn journal_files(dir: &Path) -> io::Result<Vec<(Day, PathBuf)>> {
 pub(crate) struct Journal {
     config: JournalConfig,
     open: Option<(Day, fs::File)>,
+    latest_day: Option<Day>,
     /// The last write failure, reported once; cleared by the next success.
     error: Option<String>,
     /// The last pruning failure, reported once. Pruning is best effort:
@@ -175,6 +176,7 @@ impl Journal {
         Self {
             config,
             open: None,
+            latest_day: None,
             error: None,
             prune_error: None,
         }
@@ -205,10 +207,17 @@ impl Journal {
     }
 
     fn try_append(&mut self, record: &DispatchRecord) -> io::Result<()> {
+        let day = Day::from(record.received_at);
+        let latest = self.latest_day.map_or(day, |latest| latest.max(day));
+        self.latest_day = Some(latest);
+        // A late completion must not recreate a day a newer receipt pruned.
+        if day < latest.minus_days(self.config.days.max(1) - 1) {
+            return Ok(());
+        }
         let mut line = serde_json::to_string(&journal_entry(record, self.config.mode))
             .map_err(io::Error::other)?;
         line.push('\n');
-        let file = self.file_for(Day::from(record.received_at))?;
+        let file = self.file_for(day)?;
         file.write_all(line.as_bytes())
     }
 
@@ -218,7 +227,7 @@ impl Journal {
             create_private_dir(&self.config.dir)?;
             let file = open_private(&self.config.dir.join(day.file_name()))?;
             self.open = Some((day, file));
-            if let Err(e) = self.prune(day) {
+            if let Err(e) = self.prune(self.latest_day.unwrap_or(day)) {
                 let message = format!(
                     "old files in the activity journal in {} cannot be deleted: {e}",
                     self.config.dir.display()
@@ -515,6 +524,19 @@ mod tests {
             }
         }
         record
+    }
+
+    #[test]
+    fn late_completion_does_not_recreate_a_pruned_receipt_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = JournalConfig { days: 1, ..JournalConfig::new(dir.path(), JournalMode::Full) };
+        let mut journal = Journal::new(config.clone());
+        journal.append(&record(1, at(NOON - 86_400), Privacy::Full));
+        journal.append(&record(3, at(NOON), Privacy::Full));
+        journal.append(&record(2, at(NOON - 86_400 + 1), Privacy::Full));
+        assert_eq!(journal.error(), None);
+        assert!(!dir.path().join(Day::from(at(NOON - 86_400)).file_name()).exists());
+        assert_eq!(config.read(10).unwrap().iter().map(|r| r.id.0).collect::<Vec<_>>(), [3]);
     }
 
     #[test]
