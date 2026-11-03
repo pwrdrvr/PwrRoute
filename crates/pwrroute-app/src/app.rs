@@ -138,6 +138,7 @@ pub struct PwrRoute {
     pub(crate) probe: Probe,
     pub(crate) engine_tasks: [Option<gpui_kit::Task<()>>; crate::engine_worker::LANES],
     pub(crate) engine_worker: EngineWorker,
+    pub(crate) link_io: crate::engine_worker::IoWorker,
     pub(crate) engine_revision: u64,
     preview_request: u64,
     config_request: u64,
@@ -248,6 +249,7 @@ impl PwrRoute {
         // Rules opens as a list: the editor appears on a click (or Down).
         let config_pending = config.is_some();
         let engine_worker = EngineWorker::new();
+        let link_io = crate::engine_worker::IoWorker::new();
         let mut this = Self {
             // A Tab stop, so Tab comes back round to the list and map keys.
             focus: cx.focus_handle().tab_stop(true),
@@ -268,10 +270,12 @@ impl PwrRoute {
                 config,
                 home.as_deref(),
                 engine_worker.client(),
+                link_io.client(),
                 store.written(),
                 cx,
             ),
             engine_worker,
+            link_io,
             store,
             home,
             config: in_charge,
@@ -844,6 +848,7 @@ impl PwrRoute {
             config,
             self.home.as_deref(),
             self.engine_worker.client(),
+            self.link_io.client(),
             self.store.written(),
             cx,
         );

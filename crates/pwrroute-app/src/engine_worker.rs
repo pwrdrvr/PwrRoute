@@ -314,7 +314,7 @@ impl Drop for EngineWorker {
     }
 }
 
-// One fixed I/O thread per Test a link owner, with one running and one
+// One fixed I/O thread per main window, with one running and one
 // latest pending request. In-flight HTTP observes the existing network
 // timeout; cancellation suppresses its result and all subsequent engine work.
 type IoJob = Box<dyn FnOnce() + Send>;
@@ -369,12 +369,9 @@ impl IoWorker {
     pub fn client(&self) -> IoClient {
         self.client.clone()
     }
-    pub fn cancel(&self) {
-        self.client.cancel();
-    }
 }
 impl IoClient {
-    fn cancel(&self) {
+    pub fn cancel(&self) {
         let mut queue = self.shared.queue.lock().unwrap();
         if let Some(token) = queue.latest.take() {
             token.cancel();

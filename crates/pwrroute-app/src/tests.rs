@@ -8189,6 +8189,7 @@ fn engine_review_closing_link_owner_cancels_gated_completion(cx: &mut TestAppCon
             None,
             None,
             app.engine_worker.client(),
+            app.link_io.client(),
             app.store.written(),
             cx,
         );

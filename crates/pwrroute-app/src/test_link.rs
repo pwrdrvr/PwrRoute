@@ -133,7 +133,7 @@ pub struct TestLink {
     pub saved_as: Option<usize>,
     task: Option<gpui_kit::Task<()>>,
     worker: crate::engine_worker::Client,
-    io: crate::engine_worker::IoWorker,
+    io: crate::engine_worker::IoClient,
     config: Option<PathBuf>,
     /// The config as the user knows it (`~/.finicky.ts`), for the trace's
     /// last step: whose default took the link.
@@ -155,6 +155,13 @@ pub struct TestLink {
     pub outcome: Option<Result<TraceView, String>>,
 }
 
+impl Drop for TestLink {
+    fn drop(&mut self) {
+        self.worker.cancel(crate::engine_worker::Lane::Link);
+        self.io.cancel();
+    }
+}
+
 impl TestLink {
     /// `config` is the Finicky config in charge, if any (`home` shortens
     /// its path to `~/…`). `worker` owns the engines; `rules` is the visual
@@ -165,6 +172,7 @@ impl TestLink {
         config: Option<PathBuf>,
         home: Option<&Path>,
         worker: crate::engine_worker::Client,
+        io: crate::engine_worker::IoClient,
         rules: RulesFile,
         cx: &mut App,
     ) -> Self {
@@ -182,7 +190,7 @@ impl TestLink {
             config,
             task: None,
             worker,
-            io: crate::engine_worker::IoWorker::new(),
+            io,
             rules,
             machine: crate::sync::machine(),
             run: None,
@@ -274,7 +282,7 @@ impl TestLink {
             machine: self.machine.clone(),
         };
         // Fetch the window's bounded worker without borrowing PwrRoute.
-        let io = self.io.client();
+        let io = self.io.clone();
         let worker = self.worker.submit_poll(
             crate::engine_worker::Lane::Link,
             Duration::ZERO,
