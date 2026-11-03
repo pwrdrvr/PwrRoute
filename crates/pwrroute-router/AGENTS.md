@@ -98,6 +98,18 @@ runs on every platform.
   `Worker::take_override`, which ends a hold instead of taking a link
   while the retention keeps nothing: the link would have nowhere to wait.
   Memory only: a new router starts on the rules.
+- **Catch the next link for a rule beside the slot, not in it.**
+  `RouterHandle::catch_next(true)` (the tray's "Add a rule for the next
+  link…") holds the next link that is not the app's or an agent's
+  (`Source::Api`) as `Step::Held { held: Sent::ForRule, .. }`, once:
+  `Worker::take_catch` clears it before the `Override` slot is read, so a
+  send, hold or pause in force stays on and is not counted for that link.
+  It never arms, and an armed one holds nothing, while the retention keeps
+  nothing. A link whose rule keeps less than the whole link (`Host`,
+  `None`, a private rule) passes by and the catch stays armed: a `None`
+  record keeps nothing waiting, so the link would be lost.
+  `DispatchRecord::held_for_rule()` reads it from the steps; the app opens
+  Add a rule for it. Memory only.
 - **A link that was not opened waits, in memory, to be opened.**
   `Worker::record` hands `RecentDispatches::push_waiting` the whole link
   (URL and opener) of every `NotOpened` record that keeps anything; it

@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <script src="./support.js"></script>
+  </head>
+  <body>
+    <x-dc>
+      <helmet data-dc-atomics>
+        <meta name="design_doc_mode" content="canvas" />
+        <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400..800&amp;family=Geist+Mono:wght@400..700&amp;display=swap" rel="stylesheet" />
+        <link rel="stylesheet" href="./pwrroute.css" />
+        <style>
+          a { color: var(--accent-bright); text-decoration: none; }
+          a:hover { color: var(--accent); }
+          /* the tray, as in Incoming Links 2a */
+          .tray { width: 300px; background: rgba(16,16,16,0.98); display: flex; flex-direction: column; position: relative; }
+          .tray .th { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-faint); }
+          .tray .th .wordmark { font-size: 14px; }
+          .tray .th .chip { margin-left: auto; }
+          .tray .sec { padding: 6px; border-bottom: 1px solid var(--border-faint); display: flex; flex-direction: column; }
+          .tray .sec:last-child { border-bottom: none; }
+          .tray .cap { display: flex; align-items: center; gap: 6px; padding: 4px 6px; font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-subtle); }
+          .tray .cap .lk { margin-left: auto; letter-spacing: 0; text-transform: none; font: 550 10.5px/1 var(--font-sans); color: var(--accent-bright); }
+          .mi-row { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 6px; font: 500 12px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .mi-row .kbd { margin-left: auto; }
+          .mi-row.quit { color: var(--text-secondary); }
+          .mi-row.hov { background: var(--bg-hover-strong); }
+          .rec { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 5px 6px; border-radius: 6px; position: relative; }
+          .rec .h { grid-column: 1; grid-row: 1; font: 500 11.5px/1.2 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; display: flex; align-items: center; gap: 6px; }
+          .rec .h .chip { font-size: 9px; padding: 2px 6px; }
+          .rec .b { grid-column: 1; grid-row: 2; font: 500 10px/1.2 var(--font-sans); color: var(--text-muted); display: flex; align-items: center; gap: 5px; white-space: nowrap; overflow: hidden; }
+          .rec .ago { grid-column: 2; grid-row: 1 / 3; align-self: center; justify-self: end; font: 500 10px/1 var(--font-mono); color: var(--text-subtle); }
+          .rec.hov { background: var(--bg-hover-strong); }
+          .lock { width: 10px; height: 10px; color: var(--text-muted); flex: 0 0 auto; }
+          .mseg4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin: 2px 6px 6px; padding: 2px; background: var(--bg-input); border: 1px solid var(--border-subtle); border-radius: 7px; }
+          .mseg4 span { height: 24px; display: flex; align-items: center; justify-content: center; gap: 5px; border-radius: 5px; font: 550 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .mseg4 span svg { display: block; opacity: 0.8; }
+          .mseg4 span.on.rules { background: var(--bg-hover-strong); color: var(--text-primary); box-shadow: inset 0 0 0 1px var(--border-default); }
+          .hint { padding: 0 12px 6px; font: 400 10.5px/1.45 var(--font-sans); color: var(--text-muted); }
+          .hint b { font-weight: 500; color: var(--text-secondary); }
+          .sbtn { height: 22px; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border: 1px solid var(--border-default); border-radius: 6px; background: var(--bg-panel); font: 550 10.5px/1 var(--font-sans); color: var(--text-primary); white-space: nowrap; }
+          .sbtn svg { display: block; }
+          .live { display: flex; align-items: center; gap: 8px; margin: 0 6px 2px; padding: 6px 6px 6px 9px; border-radius: 7px; font: 500 10.5px/1.35 var(--font-sans); color: var(--text-secondary); }
+          .live .dot { width: 6px; height: 6px; flex: none; border-radius: 999px; }
+          .live .sx { flex: 1; min-width: 0; }
+          .live .sx b { font: 600 10.5px/1 var(--font-sans); }
+
+          /* + Rule, as in Activity Quick Add Rule: here it takes the place of the age */
+          .qa { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 5px; border: 1px solid var(--border-subtle); background: transparent; font: 600 10.5px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .qa b { font: 700 11px/1 var(--font-sans); color: var(--accent); }
+          .qa.on { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-bright); }
+          .rec .qa { grid-column: 2; grid-row: 1 / 3; align-self: center; justify-self: end; }
+          .tip { position: absolute; z-index: 6; display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--border-default); background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); font: 500 11px/1 var(--font-sans); color: var(--text-secondary); white-space: nowrap; }
+          .tip .kbd { height: 16px; font-size: 9.5px; }
+
+          /* the armed line: accent, like Send's, since the next link goes somewhere new */
+          .live.rule { background: var(--accent-tint); }
+          .live.rule .dot { background: var(--accent); box-shadow: 0 0 0 3px rgba(255,138,31,0.18); }
+          .live.rule .sx b { color: var(--accent-bright); }
+          .mi-row .ic { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; font: 700 11px/1 var(--font-sans); color: var(--accent); }
+          .mi-row .on-l { margin-left: auto; font: 550 10px/1 var(--font-sans); color: var(--accent-bright); }
+
+          /* the main window, as in Incoming Links 4a */
+          .strip-chip.acc { color: var(--accent-bright); border-color: var(--accent-border); background: var(--accent-soft); }
+          .strip-chip.acc .dot { background: var(--accent); }
+          .rail-item .cnt.info { color: var(--info-text); background: var(--info-soft); }
+          .wrap { position: relative; }
+          .fbar { display: flex; align-items: center; gap: 6px; }
+          .fchip { height: 24px; display: inline-flex; align-items: center; gap: 6px; padding: 0 10px; border: 1px solid var(--border-subtle); border-radius: 999px; background: var(--bg-panel); font: 550 11px/1 var(--font-sans); color: var(--text-secondary); }
+          .fchip b { font: 600 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .fchip.on { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-bright); }
+          .fchip.on b { color: var(--accent-bright); }
+          .ar { display: grid; grid-template-columns: 54px minmax(0, 1fr) 64px 118px 176px 40px; gap: 12px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--border-faint); font: 400 11.5px/1 var(--font-sans); color: var(--text-secondary); }
+          .ar:last-child { border-bottom: none; }
+          .ar.head { padding: 7px 14px; background: var(--bg-panel-elevated); font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.14em; text-transform: uppercase; color: var(--text-muted); }
+          .ar .t { font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .ar .u { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+          .ar .ms { text-align: right; font: 500 10.5px/1 var(--font-mono); color: var(--text-subtle); }
+          .ar .d { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+          .ar .d .pf { font: 500 10.5px/1 var(--font-mono); color: var(--text-muted); }
+          .ar.sel { background: var(--bg-row-active); }
+          .ar .d.no { color: var(--text-muted); }
+          .bi.no { background: var(--bg-panel-elevated); color: var(--text-muted); border: 1px dashed var(--border-default); }
+          .tag.hld { color: var(--info-text); background: var(--info-soft); border-color: transparent; }
+          .dim { position: absolute; left: 0; right: 0; top: 38px; bottom: 0; background: rgba(0,0,0,0.55); }
+
+          /* the Add a rule sheet, as in Add Rule From an App 1b */
+          .sheet { position: absolute; top: 64px; left: 50%; transform: translateX(-50%); width: 560px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 12px; box-shadow: var(--shadow-popover); display: flex; flex-direction: column; z-index: 3; }
+          .sheet-hd { padding: 16px 18px 12px; border-bottom: 1px solid var(--border-faint); }
+          .sheet-bd { padding: 4px 0; }
+          .sheet-bd .field { padding: 11px 18px; }
+          .sheet-bd .field-l { width: 136px; }
+          .sheet-ft { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border-faint); }
+          .sheet-ft .note { flex: 1; }
+          .pats { display: flex; flex-direction: column; gap: 5px; width: 100%; }
+          .pat { display: flex; align-items: center; gap: 9px; padding: 7px 10px; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--bg-input); }
+          .pat.on { border-color: var(--accent-border); background: var(--bg-row-active); }
+          .pat code { font: 500 11.5px/1 var(--font-mono); color: var(--text-primary); white-space: nowrap; }
+          .pat .why { margin-left: auto; font: 500 10.5px/1 var(--font-sans); color: var(--text-muted); white-space: nowrap; }
+          .pat.on .why { color: var(--accent-bright); }
+          .pats .pat .why { white-space: normal; text-align: right; line-height: 14px; padding-left: 10px; }
+          .radio { width: 13px; height: 13px; border-radius: 50%; border: 1px solid var(--border-strong); flex: 0 0 auto; }
+          .radio.on { border: 4px solid var(--accent); }
+          .coll { width: 100%; display: flex; flex-direction: column; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); overflow: hidden; }
+          .coll .cap { padding: 6px 10px; background: var(--bg-panel-elevated); font: 600 10.5px/1.3 var(--font-sans); color: var(--text-secondary); }
+          .lnk { margin-top: 4px; font: 500 11px/16.5px var(--font-mono); color: var(--text-secondary); overflow-wrap: anywhere; }
+          .swrow { display: flex; align-items: center; gap: 10px; font: 500 11.5px/1 var(--font-sans); color: var(--text-primary); }
+          .eyebrow.info { color: var(--info-text); }
+          .rules-say { display: flex; align-items: center; gap: 6px; font: 500 10.5px/1.4 var(--font-sans); color: var(--text-muted); }
+
+          /* the new footer: Discard, Save, Save and open link */
+          .ft3 { display: flex; flex-direction: column; gap: 9px; padding: 12px 18px; border-top: 1px solid var(--border-faint); }
+          .ft3 .why { font: 400 10.5px/1.5 var(--font-sans); color: var(--text-subtle); }
+          .ft3 .why b { font-weight: 600; color: var(--text-secondary); }
+          .acts3 { display: flex; align-items: center; gap: 8px; }
+          .acts3 .fill { flex: 1; }
+          .btn .kbd { height: 16px; font-size: 9.5px; }
+          .btn.primary .kbd { border-color: rgba(22,10,0,0.25); color: var(--accent-on); }
+          .btn.off { opacity: 0.42; }
+
+          /* 2d: outcomes, side by side */
+          .outs { display: grid; grid-template-columns: repeat(4, 300px); gap: 14px; padding: 16px; }
+          .out { display: flex; flex-direction: column; gap: 10px; }
+          .out .cap2 { font: 600 9.5px/1 var(--font-sans); letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); }
+          .out .mini { border: 1px solid var(--border-default); border-radius: 10px; background: var(--bg-panel-elevated); overflow: hidden; }
+          .out .mini .ft3 { border-top: none; padding: 10px 12px; }
+          .out .mini .acts3 { gap: 6px; }
+          .out .mini .btn.sm { padding: 5px 7px; }
+          .out .res { font: 400 11px/1.55 var(--font-sans); color: var(--text-secondary); text-wrap: pretty; }
+          .out .res b { font-weight: 600; color: var(--text-primary); }
+          .toast { display: flex; align-items: center; gap: 10px; padding: 7px 7px 7px 12px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 10px; box-shadow: var(--shadow-popover); font: 500 11px/1.3 var(--font-sans); color: var(--text-primary); }
+          .toast .tx { flex: 1; min-width: 0; }
+          .toast .tx span { display: block; font-size: 10px; color: var(--text-muted); }
+          .toast a { font: 600 10.5px/1 var(--font-sans); white-space: nowrap; }
+
+          .native { width: 300px; background: var(--bg-panel-elevated); border: 1px solid var(--border-default); border-radius: 6px; padding: 4px; display: flex; flex-direction: column; box-shadow: var(--shadow-popover); }
+          .native .mi-row { border-radius: 4px; }
+          .native .sep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+          .native .rd { width: 12px; display: inline-flex; justify-content: center; color: var(--text-primary); font: 600 11px/1 var(--font-sans); }
+          .native .mi-row .sub2 { margin-left: auto; font: 500 10.5px/1 var(--font-sans); color: var(--text-subtle); }
+        </style>
+      </helmet>
+      <svg width="0" height="0" style="position: absolute;" aria-hidden="true"><symbol id="mk" viewBox="188 188 648 648"><g fill="none" stroke="currentColor" stroke-width="56" stroke-linecap="round"><g opacity="0.55"><path d="M384 512C512 512 512 724 640 724"></path><circle cx="724" cy="724" r="84"></circle></g><path d="M384 512C512 512 512 300 640 300"></path><circle cx="300" cy="512" r="84"></circle><circle cx="724" cy="300" r="84"></circle></g></symbol><symbol id="fw" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 17 5-5-5-5"></path><path d="M4 18v-2a4 4 0 0 1 4-4h12"></path></symbol><symbol id="hd" viewBox="0 0 16 16"><g fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3" width="11" height="10" rx="2"></rect><path d="M2.5 9h3l1 1.5h3l1-1.5h3"></path></g></symbol><symbol id="ps" viewBox="0 0 16 16"><g fill="currentColor"><rect x="4" y="3" width="3" height="10" rx="1"></rect><rect x="9" y="3" width="3" height="10" rx="1"></rect></g></symbol><symbol id="x" viewBox="0 0 16 16"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"></path></symbol><symbol id="r0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.1 5.55a2 2 0 0 0 1.8 0l3.65-1.83A1 1 0 0 1 21 4.62v12.76a1 1 0 0 1-.55.9l-4.55 2.27a2 2 0 0 1-1.8 0l-4.2-2.1a2 2 0 0 0-1.8 0l-3.65 1.83A1 1 0 0 1 3 19.38V6.62a1 1 0 0 1 .55-.9L8.1 3.45a2 2 0 0 1 1.8 0z"></path><path d="M15 5.76v15"></path><path d="M9 3.24v15"></path></symbol><symbol id="r1" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"></circle><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"></path><circle cx="18" cy="5" r="3"></circle></symbol><symbol id="r2" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2v7.5a2 2 0 0 1-.2.9L4.7 20.6a1 1 0 0 0 .9 1.4h12.8a1 1 0 0 0 .9-1.4L14.2 10.4a2 2 0 0 1-.2-.9V2"></path><path d="M8.5 2h7"></path><path d="M7 16h10"></path></symbol><symbol id="r3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></symbol></svg>
+
+      <!-- ================= TURN 1 — + Rule on the tray's recent links ================= -->
+      <section class="dv-turn" id="t1">
+        <div class="dv-thd"><a class="dv-tid" href="#t1">1</a><span class="dv-tname">Menu bar &rsaquo; + Rule on a recent link</span></div>
+        <p class="dv-sub">The tray&rsquo;s Recent rows are the links people most often want a rule for, right after one opened in the wrong place, and the only way from there to a rule was Open Activity, find the row, then + Rule. Now a recent row does what an Activity row does (Activity Quick Add Rule 1a): while the pointer is over it, its age gives way to <b>+ Rule</b>. A click closes the dropdown and opens the main window on Activity with that row selected and the <b>Add a rule</b> sheet open for its link. The sheet is Activity&rsquo;s, unchanged; only its eyebrow says where it came from.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="1a" data-screen-label="1a Hover: + Rule where the age was">
+            <div class="dv-olabel" style="max-width: 300px;"><a class="dv-oid" href="#1a">1a</a><span>The pointer is over the second recent link. The row lights, <b>2m</b> gives way to <b>+ Rule</b> in the accent, and the tooltip names the action. Nothing moves: the button is 20 high, inside the row&rsquo;s two lines, and right-aligned where the age was. Off the row, the age comes back.</span></div>
+            <div class="dv-card" style="width: 300px; overflow: visible;">
+              <div class="tray">
+                <div class="th"><svg class="mark" width="16" height="16" aria-hidden="true"><use href="#mk"></use></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip ok">default</span></div>
+                <div class="sec"><span class="cap">Recent<span class="lk">Open Activity</span></span>
+                  <div class="rec"><span class="h">git.example.com</span><span class="ago">1m</span><span class="b"><span class="bi">Ed</span>Microsoft Edge &middot; Work &middot; handler 2</span></div>
+                  <div class="rec hov"><span class="h">docs.example.com</span><span class="qa on"><b>+</b>Rule</span><span class="b"><span class="bi">Ed</span>Microsoft Edge &middot; Work &middot; handler 2</span>
+                    <div class="tip" style="right: 4px; top: 40px;">Add a rule for this link<span class="kbd">&#8984;N</span></div></div>
+                  <div class="rec"><span class="h">tracker.example.com</span><span class="ago">2m</span><span class="b"><span class="bi">Ed</span>Microsoft Edge &middot; Work &middot; handler 2</span></div>
+                </div>
+                <div class="sec"><span class="cap">Incoming links</span><div class="mseg4" role="radiogroup"><span class="on rules">Rules</span><span class=""><svg width="11" height="11" aria-hidden="true"><use href="#fw"></use></svg>Send</span><span class=""><svg width="11" height="11" aria-hidden="true"><use href="#hd"></use></svg>Hold</span><span class=""><svg width="10" height="10" aria-hidden="true"><use href="#ps"></use></svg>Pause</span></div><div class="hint">Send goes to <b>Microsoft Edge</b>. Hold keeps links here, unopened, until you open them.</div></div>
+                <div class="sec"><div class="mi-row">Test a link&hellip;<span class="kbd">&#8984;T</span></div><div class="mi-row">Rules&hellip;<span class="kbd">&#8984;R</span></div><div class="mi-row">Settings&hellip;<span class="kbd">&#8984;,</span></div></div>
+                <div class="sec"><div class="mi-row quit">Quit PwrRoute<span class="kbd">&#8984;Q</span></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1b" data-screen-label="1b The click: Activity with the sheet open">
+            <div class="dv-olabel" style="max-width: 1000px;"><a class="dv-oid" href="#1b">1b</a><span>The click. The dropdown closes and the main window comes forward on Activity, filter <b>All</b>, with the row selected and scrolled into view under the sheet, so Cancel leaves the person looking at the link they picked. The sheet is the one Activity&rsquo;s + Rule opens (Add Rule From an App 1b): the link in two lines, Match narrowest first, Also catches, Sent from, Open in. Its eyebrow says <b>From the menu bar</b>. The link already opened, so the footer stays <b>Cancel</b> and <b>Add rule</b>.</span></div>
+            <div class="dv-card win wrap" style="width: 1000px; height: 700px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" width="20" height="20" aria-hidden="true"><use href="#mk"></use></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Activity</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>~/.finicky.ts &middot; 6 handlers</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body"><nav class="rail"><div class="rail-item"><svg><use href="#r0"></use></svg>Overview</div><div class="rail-item"><svg><use href="#r1"></use></svg>Rules<span class="cnt">4</span></div><div class="rail-item"><svg><use href="#r2"></use></svg>Test a link</div><div class="rail-item on"><svg><use href="#r3"></use></svg>Activity<span class="cnt">4</span></div><div class="rail-foot"><span class="st"><i></i>routing</span></div></nav>
+                <div class="pane"><div class="fbar"><span class="fchip on">All <b>4</b></span><span class="fchip">Everything else <b>1</b></span><span class="fchip">Not opened <b>0</b></span><span class="fchip">Failed <b>0</b></span><span class="fchip">Rewritten <b>0</b></span><span class="fchip">Private <b>0</b></span></div>
+                  <section class="card"><div class="ar head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span style="text-align: right;">Took</span></div>
+                    <div class="ar"><span class="t">09:41:02</span><span class="u">https://git.example.com/acme/widgets/pull/128</span><span>Slack</span><span><span class="tag">handler 2</span></span><div class="d"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="ms">5 ms</span></div>
+                    <div class="ar sel"><span class="t">09:40:12</span><span class="u">https://docs.example.com/guide/setup#install</span><span>Slack</span><span><span class="tag">handler 2</span></span><div class="d"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="ms">4 ms</span></div>
+                    <div class="ar"><span class="t">09:39:47</span><span class="u">https://tracker.example.com/issue/PR-118</span><span>Linear</span><span><span class="tag">handler 2</span></span><div class="d"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="ms">6 ms</span></div>
+                    <div class="ar"><span class="t">09:31:20</span><span class="u">https://news.example.org/story/42</span><span>Mail</span><span><span class="tag">default</span></span><div class="d"><span class="bi">Sa</span>Safari</div><span class="ms">4 ms</span></div>
+                  </section></div></div>
+              <div class="dim"></div>
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow">From the menu bar &middot; 09:40:12 &middot; sent from Slack</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk"><span style="color: var(--text-primary);">https://docs.example.com/guide/setup</span>#install</p></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats"><div class="pat on"><span class="radio on"></span><code>docs.example.com/guide/*</code><span class="why">Everything under the first part of the path.</span></div><div class="pat"><span class="radio"></span><code>docs.example.com/*</code><span class="why">Everything on this host.</span></div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Sent from</span><span class="field-sub">Optional.</span></div><div class="field-c"><div class="swrow"><span class="sw"></span>Only when sent from Slack</div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                </div>
+                <div class="sheet-ft"><span class="note">Becomes rule 5, with this link as its example. Saved to rules.json.</span><span class="btn quiet">Cancel</span><span class="btn primary">Add rule</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="1c" data-screen-label="1c Rows without + Rule">
+            <div class="dv-olabel" style="max-width: 300px;"><a class="dv-oid" href="#1c">1c</a><span>A row kept as <b>host only</b> has no URL to write a rule from, so hovering it lights the row and the age stays, as in Activity (Quick Add Rule 1e). No disabled button: a control that never works there is noise. Held links keep their own <b>&middot;&middot;&middot;</b> &rsaquo; <b>Make a rule&hellip;</b> (Incoming Links 2d); Recent rows get + Rule, Held rows do not, so neither list grows a second way to do one thing.</span></div>
+            <div class="dv-card" style="width: 300px;">
+              <div class="tray">
+                <div class="th"><svg class="mark" width="16" height="16" aria-hidden="true"><use href="#mk"></use></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip ok">default</span></div>
+                <div class="sec"><span class="cap">Recent<span class="lk">Open Activity</span></span>
+                  <div class="rec hov"><span class="h">bank.example.com<span class="chip"><svg class="lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>host only</span></span><span class="ago">1m</span><span class="b"><span class="bi">Sa</span>Safari &middot; private window &middot; rule 8</span></div>
+                  <div class="rec"><span class="h">docs.example.com</span><span class="ago">2m</span><span class="b"><span class="bi">Ed</span>Microsoft Edge &middot; Work &middot; handler 2</span></div>
+                </div>
+                <div class="sec"><div class="mi-row">Test a link&hellip;<span class="kbd">&#8984;T</span></div><div class="mi-row">Rules&hellip;<span class="kbd">&#8984;R</span></div><div class="mi-row">Settings&hellip;<span class="kbd">&#8984;,</span></div></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Which rows.</b> A Recent row whose record kept its full URL, the same rows that get + Rule in Activity, opened or not (a Don&rsquo;t open link gets it too). Never on a host-only row. <b>Click.</b> Closes the dropdown, opens or raises the main window on Activity (filter All, the row selected and in view), then opens the sheet. If the row has left Activity&rsquo;s memory since the dropdown opened, the window opens on Activity with a note instead of the sheet. <b>The rest of the row</b> does what it did before. <b>Keyboard.</b> Arrow keys move through the dropdown&rsquo;s rows; &#8984;N on a focused Recent row does what its + Rule does, as &#8984;N does on an Activity row. <b>Measurements.</b> The button is Activity&rsquo;s: 20 high, 10.5/600 label, 11/700 accent &ldquo;+&rdquo;, 4 gap, 7 side padding, radius 5, lit (<code>--accent-soft</code>, <code>--accent-border</code>, <code>--accent-bright</code>) because it only shows on the hovered row. It is right-aligned in the age column and centred on the row&rsquo;s two lines; the host keeps its ellipsis where the button is wider than the age. Windows and Linux use the native menu, which has no recents (Incoming Links 2g), so this is macOS only.</p>
+      </section>
+
+      <!-- ================= TURN 2 — Add a rule for the next link ================= -->
+      <section class="dv-turn" id="t2">
+        <div class="dv-thd"><a class="dv-tid" href="#t2">2</a><span class="dv-tname">Menu bar &rsaquo; Add a rule for the next link</span></div>
+        <p class="dv-sub">Some links are hard to write a rule for after the fact: they open, redirect and are gone, or the app that sent them never shows the URL. Hold already catches them (Incoming Links 2c), but the person then has to open the dropdown again, find the held link and choose Make a rule&hellip;. This is the one-shot version: arm it from the dropdown, click the link in any app, and PwrRoute does not open it; the main window comes forward with the Add a rule sheet for that link. The person picks the pattern and where it opens, then chooses <b>Discard</b>, <b>Save</b> or <b>Save and open link</b>, which saves the rule and opens the link where the new rule says.</p>
+        <div class="dv-opts">
+
+          <div class="dv-opt" id="2a" data-screen-label="2a The item in the dropdown">
+            <div class="dv-olabel" style="max-width: 300px;"><a class="dv-oid" href="#2a">2a</a><span>The item sits first among the actions, above Test a link&hellip;, since both take a link to the rules. It is an action, not a fifth answer in the Incoming links switch: it lasts one link and never has a For row, and the switch is full at 300px. It has no key; &#8984;N already means &ldquo;a rule for this row&rdquo;.</span></div>
+            <div class="dv-card" style="width: 300px;">
+              <div class="tray">
+                <div class="th"><svg class="mark" width="16" height="16" aria-hidden="true"><use href="#mk"></use></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip ok">default</span></div>
+                <div class="sec"><span class="cap">Recent<span class="lk">Open Activity</span></span>
+                  <div class="rec"><span class="h">docs.example.com</span><span class="ago">1m</span><span class="b"><span class="bi">Ed</span>Microsoft Edge &middot; Work &middot; handler 2</span></div>
+                  <div class="rec"><span class="h">tracker.example.com</span><span class="ago">2m</span><span class="b"><span class="bi">Ed</span>Microsoft Edge &middot; Work &middot; handler 2</span></div>
+                </div>
+                <div class="sec"><span class="cap">Incoming links</span><div class="mseg4" role="radiogroup"><span class="on rules">Rules</span><span class=""><svg width="11" height="11" aria-hidden="true"><use href="#fw"></use></svg>Send</span><span class=""><svg width="11" height="11" aria-hidden="true"><use href="#hd"></use></svg>Hold</span><span class=""><svg width="10" height="10" aria-hidden="true"><use href="#ps"></use></svg>Pause</span></div><div class="hint">Send goes to <b>Microsoft Edge</b>. Hold keeps links here, unopened, until you open them.</div></div>
+                <div class="sec"><div class="mi-row hov"><span class="ic">+</span>Add a rule for the next link&hellip;</div><div class="mi-row">Test a link&hellip;<span class="kbd">&#8984;T</span></div><div class="mi-row">Rules&hellip;<span class="kbd">&#8984;R</span></div><div class="mi-row">Settings&hellip;<span class="kbd">&#8984;,</span></div></div>
+                <div class="sec"><div class="mi-row quit">Quit PwrRoute<span class="kbd">&#8984;Q</span></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2b" data-screen-label="2b Armed: waiting for the next link">
+            <div class="dv-olabel" style="max-width: 300px;"><a class="dv-oid" href="#2b">2b</a><span>Armed. The dropdown closes so the person can go click the link. Reopened, it says what is on: the header chip reads <b>next link: rule</b>, a live line under Incoming links says what the next link will do, with <b>Cancel</b>, and the item reads <b>Waiting&hellip;</b>. The switch keeps its answer: it applies again from the link after.</span></div>
+            <div class="dv-card" style="width: 300px;">
+              <div class="tray">
+                <div class="th"><svg class="mark" width="16" height="16" aria-hidden="true"><use href="#mk"></use></svg><p class="wordmark">Pwr<b>Route</b></p><span class="chip acc">next link: rule</span></div>
+                <div class="sec"><span class="cap">Recent<span class="lk">Open Activity</span></span>
+                  <div class="rec"><span class="h">docs.example.com</span><span class="ago">1m</span><span class="b"><span class="bi">Ed</span>Microsoft Edge &middot; Work &middot; handler 2</span></div>
+                  <div class="rec"><span class="h">tracker.example.com</span><span class="ago">2m</span><span class="b"><span class="bi">Ed</span>Microsoft Edge &middot; Work &middot; handler 2</span></div>
+                </div>
+                <div class="sec"><span class="cap">Incoming links</span><div class="mseg4" role="radiogroup"><span class="on rules">Rules</span><span class=""><svg width="11" height="11" aria-hidden="true"><use href="#fw"></use></svg>Send</span><span class=""><svg width="11" height="11" aria-hidden="true"><use href="#hd"></use></svg>Hold</span><span class=""><svg width="10" height="10" aria-hidden="true"><use href="#ps"></use></svg>Pause</span></div>
+                  <div class="live rule"><span class="dot"></span><span class="sx"><b>Next link</b> opens Add a rule, not a browser</span><span class="sbtn stop"><svg width="10" height="10" aria-hidden="true"><use href="#x"></use></svg>Cancel</span></div></div>
+                <div class="sec"><div class="mi-row"><span class="ic">+</span>Add a rule for the next link&hellip;<span class="on-l">Waiting&hellip;</span></div><div class="mi-row">Test a link&hellip;<span class="kbd">&#8984;T</span></div><div class="mi-row">Rules&hellip;<span class="kbd">&#8984;R</span></div><div class="mi-row">Settings&hellip;<span class="kbd">&#8984;,</span></div></div>
+                <div class="sec"><div class="mi-row quit">Quit PwrRoute<span class="kbd">&#8984;Q</span></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2c" data-screen-label="2c The link arrives: the sheet, Save and open link">
+            <div class="dv-olabel" style="max-width: 1000px;"><a class="dv-oid" href="#2c">2c</a><span>A link arrives from Linear. It is not opened; it is recorded held, and the main window comes forward on Activity with the Add a rule sheet. The eyebrow is info blue, as held links are, and says it was caught and not opened. Under the link, what the rules would do with it today. <b>Open in</b> starts empty and is where focus lands after Match, because choosing it is the point; here the person chose Google Chrome &middot; Work. The footer says where <b>Save and open link</b> will send it, and holds the three choices: <b>Discard</b> on the left, <b>Save</b>, and <b>Save and open link</b> as the primary.</span></div>
+            <div class="dv-card win wrap" style="width: 1000px; height: 740px;">
+              <div class="strip"><div class="lights"><span class="r"></span><span class="y"></span><span class="g"></span></div><div class="strip-gutter"></div><div class="brand"><svg class="mark" width="20" height="20" aria-hidden="true"><use href="#mk"></use></svg><p class="wordmark">Pwr<b>Route</b></p></div><span class="strip-sep">&rsaquo;</span><span class="strip-crumb">Activity</span><div class="strip-fill"></div><span class="strip-chip"><span class="dot"></span>~/.finicky.ts &middot; 6 handlers</span><span class="strip-chip"><span class="dot"></span>default browser</span></div>
+              <div class="body"><nav class="rail"><div class="rail-item"><svg><use href="#r0"></use></svg>Overview</div><div class="rail-item"><svg><use href="#r1"></use></svg>Rules<span class="cnt">4</span></div><div class="rail-item"><svg><use href="#r2"></use></svg>Test a link</div><div class="rail-item on"><svg><use href="#r3"></use></svg>Activity<span class="cnt info">1 held</span></div><div class="rail-foot"><span class="st"><i></i>routing</span></div></nav>
+                <div class="pane"><div class="fbar"><span class="fchip on">All <b>5</b></span><span class="fchip">Everything else <b>1</b></span><span class="fchip">Not opened <b>1</b></span><span class="fchip">Failed <b>0</b></span><span class="fchip">Rewritten <b>0</b></span><span class="fchip">Private <b>0</b></span></div>
+                  <section class="card"><div class="ar head"><span>Time</span><span>Link</span><span>From</span><span>Rule</span><span>Opened in</span><span style="text-align: right;">Took</span></div>
+                    <div class="ar sel"><span class="t">09:42:05</span><span class="u">https://auth.example.com/login/sso?team=acme&amp;next=%2Fhome</span><span>Linear</span><span><span class="tag hld">held for a rule</span></span><div class="d no"><span class="bi no">&mdash;</span>Not opened</div><span class="ms">3 ms</span></div>
+                    <div class="ar"><span class="t">09:41:02</span><span class="u">https://git.example.com/acme/widgets/pull/128</span><span>Slack</span><span><span class="tag">handler 2</span></span><div class="d"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="ms">5 ms</span></div>
+                    <div class="ar"><span class="t">09:40:12</span><span class="u">https://docs.example.com/guide/setup#install</span><span>Slack</span><span><span class="tag">handler 2</span></span><div class="d"><span class="bi">Ed</span>Microsoft Edge<span class="pf">Work</span></div><span class="ms">4 ms</span></div>
+                  </section></div></div>
+              <div class="dim"></div>
+              <div class="sheet">
+                <div class="sheet-hd"><div class="eyebrow info">Caught by the menu bar &middot; 09:42:05 &middot; sent from Linear &middot; not opened</div><h2 class="ttl" style="font-size: 16px;">Add a rule for this link</h2><p class="lnk"><span style="color: var(--text-primary);">https://auth.example.com/login/sso</span>?team=acme&amp;next=%2Fhome</p><div class="rules-say" style="margin-top: 6px;">Today the rules send it to <span class="bi">Sa</span>Safari &middot; Everything else</div></div>
+                <div class="sheet-bd">
+                  <div class="field"><div class="field-l"><span>Match</span><span class="field-sub">Narrowest first. The query and fragment are left out.</span></div><div class="field-c"><div class="pats"><div class="pat on"><span class="radio on"></span><code>auth.example.com/login/*</code><span class="why">Everything under the first part of the path.</span></div><div class="pat"><span class="radio"></span><code>auth.example.com/*</code><span class="why">Everything on this host.</span></div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Also catches</span><span class="field-sub">Recent links in memory that this rule matches.</span></div><div class="field-c"><div class="coll"><div class="cap">No other recent link matches this pattern.</div></div></div></div>
+                  <div class="field"><div class="field-l"><span>Sent from</span><span class="field-sub">Optional.</span></div><div class="field-c"><div class="swrow"><span class="sw"></span>Only when sent from Linear</div></div></div>
+                  <div class="field"><div class="field-l"><span>Open in</span></div><div class="field-c" style="gap: 6px;"><div class="inp" style="width: 100%;"><span class="bi">Ch</span>Google Chrome<span class="caret">&#9662;</span></div><div class="inp" style="width: 100%;">Work<span class="caret">&#9662;</span></div></div></div>
+                </div>
+                <div class="ft3"><span class="why">Becomes rule 5, with this link as its example. <b>Save and open link</b> opens it in Google Chrome &middot; Work.</span>
+                  <div class="acts3"><span class="btn">Discard<span class="kbd">esc</span></span><span class="fill"></span><span class="btn">Save</span><span class="btn primary">Save and open link<span class="kbd">&#8984;&#8617;</span></span></div></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2d" data-screen-label="2d The footer, and what each choice does">
+            <div class="dv-olabel" style="max-width: 1290px;"><a class="dv-oid" href="#2d">2d</a><span>The footer before it can save, then what each button leaves behind. The link is never lost: whatever is chosen, it is in Activity, held until opened, as Hold keeps links. Each outcome is a toast at the foot of the window with the one next step it needs.</span></div>
+            <div class="dv-card" style="width: 1290px;">
+              <div class="outs">
+                <div class="out"><span class="cap2">Before a browser is chosen</span>
+                  <div class="mini"><div class="ft3"><span class="why">Choose where it opens to save. Discard keeps the link held.</span><div class="acts3"><span class="btn sm">Discard<span class="kbd">esc</span></span><span class="fill"></span><span class="btn sm off">Save</span><span class="btn primary sm off">Save and open link</span></div></div></div>
+                  <span class="res">Both saves are dimmed until Match has a pattern and Open in has a browser, the same rule as a draft in Rules (Rule Drafts). Return and &#8984;&#8617; say why instead of saving.</span></div>
+                <div class="out"><span class="cap2">Discard</span>
+                  <div class="toast"><span class="tx">No rule saved<span>The link is held in Activity</span></span><a>Open by the rules</a><a style="color: var(--text-secondary);">Undo</a></div>
+                  <span class="res">The sheet closes, nothing is written. The link stays <b>held</b> in Activity &rsaquo; Not opened, where it can be opened, sent elsewhere or given a rule later. <b>Open by the rules</b> sends it where it would have gone (Safari). Undo reopens the sheet as it was.</span></div>
+                <div class="out"><span class="cap2">Save</span>
+                  <div class="toast"><span class="tx">Rule 5 saved<span>The link is held in Activity</span></span><a>Open it</a><a style="color: var(--text-secondary);">Show in Rules</a></div>
+                  <span class="res">The rule is in rules.json and routes the next matching link. This link stays <b>held</b>: for when the person caught it only to write the rule. <b>Open it</b> sends it by the rules, now rule 5, to Google Chrome &middot; Work.</span></div>
+                <div class="out"><span class="cap2">Save and open link</span>
+                  <div class="toast"><span class="tx">Rule 5 saved &middot; opened in Google Chrome &middot; Work</span><a style="color: var(--text-secondary);">Show in Rules</a></div>
+                  <span class="res">The rule is saved, then the link goes through the router as if just clicked, so rule 5 takes it, Chrome comes forward with it, and the window steps back. The held row gains <b>opened later in Google Chrome</b> (Not Opened 2c). If the open fails, the rule stays saved and the toast says so, with the fallback browser&rsquo;s Open.</span></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="dv-opt" id="2e" data-screen-label="2e Windows and Linux">
+            <div class="dv-olabel" style="max-width: 300px;"><a class="dv-oid" href="#2e">2e</a><span>Windows and Linux: the native menu gains the item under Open PwrRoute. Armed, it shows as checked with <b>waiting</b>; choosing it again cancels. The sheet is the same in the main window.</span></div>
+            <div class="dv-card" style="width: 300px; padding: 0; border: none; background: transparent; display: flex; flex-direction: column; gap: 12px;">
+              <div class="native"><div class="mi-row">Open PwrRoute</div><div class="mi-row"><span class="rd"></span>Add a rule for the next link</div><div class="mi-row">Test a link&hellip;</div><div class="sep"></div><div class="mi-row"><span class="rd">&#9679;</span>Rules</div><div class="mi-row"><span class="rd"></span>Send to Microsoft Edge</div><div class="mi-row"><span class="rd"></span>Hold the next link</div><div class="mi-row"><span class="rd"></span>Pause</div><div class="sep"></div><div class="mi-row quit">Quit</div></div>
+              <div class="native"><div class="mi-row">Open PwrRoute</div><div class="mi-row"><span class="rd">&#10003;</span>Add a rule for the next link<span class="sub2">waiting</span></div><div class="mi-row">Test a link&hellip;</div><div class="sep"></div><div class="mi-row"><span class="rd">&#9679;</span>Rules</div><div class="mi-row"><span class="rd"></span>Send to Microsoft Edge</div><div class="mi-row"><span class="rd"></span>Hold the next link</div><div class="mi-row"><span class="rd"></span>Pause</div><div class="sep"></div><div class="mi-row quit">Quit</div></div>
+            </div>
+          </div>
+
+        </div>
+        <p class="dv-note"><b>Which link.</b> The next link the OS hands PwrRoute, from any app. Links an agent opens through PwrRoute&rsquo;s tools are not caught: the person is waiting for their own click. <b>Precedence.</b> It wins over Send, Hold and Pause for that one link and uses none of their count; the link after goes back to the switch. Rewrites run first, so the sheet shows the link the rules see, as Test a link does. <b>How long.</b> Until a link arrives, Cancel, or Quit; there is no timer. Arming again while armed does nothing. A second link that arrives while the sheet is open follows the switch. <b>Privacy.</b> The whole link waits in memory until it is opened or leaves Activity, whatever Activity keeps for it once opened, as for held links. <b>The record.</b> Rule chip <i>held for a rule</i> in info blue; Opened in <i>&mdash; Not opened</i>; on Not opened&rsquo;s filter with other held links. <b>Closing the sheet</b> by Esc, the close button or clicking outside is Discard. <b>Keys.</b> Esc Discard; &#8984;&#8617; Save and open link; &#8984;S Save, as in Rules. <b>Save and open link</b> on the Activity sheet of turn 1 is not offered: that link already opened, and Open again is on its expanded row.</p>
+        <p class="dv-next">Try next: &ldquo;the menu bar mark with a dot while armed&rdquo; &middot; &ldquo;Hold &rsaquo; For: next link, then ask for a rule&rdquo; &middot; &ldquo;Add a rule for the next link from Test a link&rdquo;</p>
+      </section>
+    </x-dc>
+    <script type="text/x-dc" data-dc-script data-props='{}'>
+      class Component extends DCLogic {
+        renderVals() { return {}; }
+      }
+    </script>
+  </body>
+</html>

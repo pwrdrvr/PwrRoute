@@ -220,31 +220,43 @@ pub enum NotOpenedReason {
     Hold,
 }
 
-/// Which send or hold took a link: the `nth` of `of` next links, or all links.
-/// Serialized inside [`Step::Sent`] as `{"kind":"next","nth":1,"of":3}` or
-/// `{"kind":"all"}`.
+/// Which send or hold took a link: the `nth` of `of` next links, all links,
+/// or the next link caught for a rule. Serialized inside [`Step::Sent`] as
+/// `{"kind":"next","nth":1,"of":3}`, `{"kind":"all"}` or
+/// `{"kind":"forRule"}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Sent {
-    Next { nth: u32, of: u32 },
+    Next {
+        nth: u32,
+        of: u32,
+    },
     All,
+    /// The tray's "Add a rule for the next link": the next link was held
+    /// so the user could write a rule for it
+    /// ([`RouterHandle::catch_next`](crate::RouterHandle::catch_next)).
+    /// Only ever a [`Step::Held`]'s.
+    ForRule,
 }
 
 impl Sent {
-    /// "next link", "next link 2 of 3", "all links": the trace's words.
+    /// "next link", "next link 2 of 3", "all links", "for a rule": the
+    /// trace's words.
     pub fn label(self) -> String {
         match self {
             Self::Next { of: 1, .. } => "next link".to_owned(),
             Self::Next { nth, of } => format!("next link {nth} of {of}"),
             Self::All => "all links".to_owned(),
+            Self::ForRule => "for a rule".to_owned(),
         }
     }
 
-    /// "next link" or "all links", without the count.
+    /// "next link", "all links" or "for a rule", without the count.
     pub fn short(self) -> &'static str {
         match self {
             Self::Next { .. } => "next link",
             Self::All => "all links",
+            Self::ForRule => "for a rule",
         }
     }
 }
@@ -429,6 +441,20 @@ impl DispatchRecord {
         reason
     }
 
+    /// The tray's "Add a rule for the next link" held this link
+    /// ([`Sent::ForRule`]): the app opens Add a rule for it.
+    pub fn held_for_rule(&self) -> bool {
+        self.steps.iter().any(|step| {
+            matches!(
+                step,
+                Step::Held {
+                    held: Sent::ForRule,
+                    ..
+                }
+            )
+        })
+    }
+
     /// The dispatch this one opened later ([`Step::Released`]), if any.
     pub fn released_from(&self) -> Option<DispatchId> {
         self.steps.iter().find_map(|step| match step {
@@ -492,10 +518,12 @@ impl DispatchRecord {
                 Step::Sent { sent, .. } => line.push_str(match sent {
                     Sent::Next { .. } => " sent=next",
                     Sent::All => " sent=all",
+                    Sent::ForRule => " sent=for-rule",
                 }),
                 Step::Held { held, .. } => line.push_str(match held {
                     Sent::Next { .. } => " held=next",
                     Sent::All => " held=all",
+                    Sent::ForRule => " held=for-rule",
                 }),
                 Step::Released { from, .. } => line.push_str(&format!(" released={}", from.0)),
                 Step::ConfigError { .. } => line.push_str(" config-error"),
