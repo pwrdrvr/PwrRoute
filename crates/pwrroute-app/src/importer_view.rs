@@ -346,22 +346,28 @@ fn open_inner(
             (RulesStore::load(rules).written(), std::env::home_dir())
         });
     let recent = recent_links(cx);
-    let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
-    let mut model = if path.extension().is_some_and(|ext| ext == "json") {
-        ImportModel::read_rules(&path, home.as_deref(), in_charge.as_deref(), existing)
-    } else {
-        ImportModel::read(
-            &path,
-            home.as_deref(),
-            in_charge.as_deref(),
-            &refs,
-            existing,
-        )
-    };
-    if first_run {
-        model.start_at_source();
-    }
-    show(model, from_first_run, cx);
+    let loading = ImportModel::failed(&path, display_path(&path, home.as_deref()), "Reading config…".into());
+    show(loading, from_first_run, cx);
+    let Some(window) = importer_window(cx) else { return; };
+    let request = Rc::new(());
+    let _ = window.update(cx, |this, _, cx| { this.loading = true; this.request = request.clone(); cx.notify(); });
+    let result = crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Import, move || {
+        let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
+        let mut model = if path.extension().is_some_and(|ext| ext == "json") {
+            ImportModel::read_rules(&path, home.as_deref(), in_charge.as_deref(), existing)
+        } else {
+            ImportModel::read(&path, home.as_deref(), in_charge.as_deref(), &refs, existing)
+        };
+        if first_run { model.start_at_source(); }
+        model
+    });
+    cx.spawn(async move |cx| {
+        if let Ok(model) = result.recv().await {
+            let _ = window.update(cx, |this, _, cx| {
+                if Rc::ptr_eq(&this.request, &request) { this.model = model; this.loading = false; cx.notify(); }
+            });
+        }
+    }).detach();
 }
 
 /// Shows `model` in the importer, opening it when none is open. An open
@@ -382,6 +388,8 @@ fn show_attempt(
     }
     if let Some(window) = importer_window(cx) {
         let _ = window.update(cx, |this, window, cx| {
+            this.request = Rc::new(());
+            this.loading = false;
             this.model = model;
             let earlier_outcome = this
                 .saved
@@ -447,6 +455,8 @@ fn show_attempt(
 /// The importer's window.
 pub struct Importer {
     pub model: ImportModel,
+    loading: bool,
+    request: Rc<()>,
     pub focus: FocusHandle,
     menu_bar: Entity<MenuBar>,
     /// First run opened it and waits to hear how it is left. Taken by
@@ -469,6 +479,8 @@ impl Importer {
         .detach();
         Self {
             model,
+            loading: false,
+            request: Rc::new(()),
             focus: cx.focus_handle(),
             menu_bar: MenuBar::listed("Import Finicky Config", cx),
             from_first_run: None,
@@ -493,6 +505,7 @@ impl Importer {
     }
 
     fn next(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.loading { return; }
         match self.model.next_step() {
             Some(step) => {
                 self.model.step = step;
@@ -913,23 +926,7 @@ pub fn found_config(home: Option<&Path>, cx: &App) -> Option<FoundConfig> {
     {
         return None;
     }
-    let holds = pwrroute_engine::Engine::load(
-        &file,
-        Rc::new(pwrroute_engine::DefaultHost),
-        pwrroute_engine::Limits::default(),
-    )
-    .ok()
-    .and_then(|engine| engine.describe().ok().flatten())
-    .map_or_else(
-        || "It did not load".to_owned(),
-        |config| {
-            format!(
-                "{}, {} and a default browser",
-                plural(config.rewrites.len(), "rewrite"),
-                plural(config.handlers.len(), "handler")
-            )
-        },
-    );
+    let holds = "Review this config to see its rules and default browser".to_owned();
     Some(FoundConfig {
         shown: display_path(&file, home),
         file,
@@ -2425,7 +2422,9 @@ fn footer(model: &ImportModel, saved: Option<&SavedImport>, cx: &mut Context<'_,
 impl Render for Importer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let model = self.model.clone();
-        let body = match (&model.problem, model.step) {
+        let body = if self.loading {
+            div().flex_1().p(px(24.0)).child(text("Reading and reviewing config…", 13.0, 500.0, theme::text_muted())).into_any_element()
+        } else { match (&model.problem, model.step) {
             (Some(problem_text), _) => problem(&model, problem_text, cx).into_any_element(),
             (None, _) if model.rules_file.is_some() => rules_review(&model).into_any_element(),
             (None, Step::Review) => div()
@@ -2440,7 +2439,7 @@ impl Render for Importer {
             (None, Step::Source) => {
                 choose_source(&model, self.saved.is_some(), cx).into_any_element()
             }
-        };
+        }};
         div()
             .id(ROOT_ID)
             .role(gpui_kit::Role::Dialog)

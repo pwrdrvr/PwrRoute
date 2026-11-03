@@ -114,6 +114,19 @@ impl Probe {
         }
     }
 
+    /// Plain data only crosses the worker boundary.
+    pub fn input(&self) -> (Option<PathBuf>, Option<String>, RulesFile) {
+        (self.config.clone(), self.config_name.clone(), self.rules.clone())
+    }
+
+    pub fn from_input(input: (Option<PathBuf>, Option<String>, RulesFile)) -> Self {
+        Self { config: input.0, config_name: input.1, rules: input.2, engine: None }
+    }
+
+    pub fn stamps(&self) -> crate::engine_worker::Stamps {
+        self.engine.as_ref().map(crate::engine_worker::stamps).unwrap_or_default()
+    }
+
     /// The rules changed: the next probe loads them.
     pub fn set_rules(&mut self, rules: RulesFile) {
         if self.rules != rules {
@@ -219,6 +232,7 @@ pub struct TestRuns {
     rules: RulesFile,
     report: Option<Result<TestReport, String>>,
     ran_at: Option<SystemTime>,
+    request: u64,
 }
 
 impl TestRuns {
@@ -228,6 +242,7 @@ impl TestRuns {
             rules,
             report: None,
             ran_at: None,
+            request: 0,
         }
     }
 
@@ -236,10 +251,12 @@ impl TestRuns {
         if self.rules != rules {
             self.rules = rules;
             self.report = None;
+            self.request += 1;
         }
     }
 
     /// Runs every example and test now and keeps the report.
+    #[cfg(test)]
     pub fn run(&mut self) -> &Result<TestReport, String> {
         let report = load(self.config.as_deref(), &self.rules).and_then(|engine| {
             engine
@@ -249,6 +266,19 @@ impl TestRuns {
         self.report = Some(report);
         self.ran_at = Some(SystemTime::now());
         self.report.as_ref().expect("just set")
+    }
+
+    pub fn begin(&mut self) -> (u64, Option<PathBuf>, RulesFile) {
+        self.request += 1;
+        self.report = None;
+        (self.request, self.config.clone(), self.rules.clone())
+    }
+
+    pub fn complete(&mut self, request: u64, report: Result<TestReport, String>) -> bool {
+        if self.request != request { return false; }
+        self.report = Some(report);
+        self.ran_at = Some(SystemTime::now());
+        true
     }
 
     /// The last report, when the rules have not changed since it ran.
@@ -927,5 +957,53 @@ mod tests {
         assert!(!step_before(&step(Source::Config, 0), 3, true));
         assert!(step_before(&step(Source::Rules, 1), 2, true));
         assert!(!step_before(&step(Source::Rules, 2), 2, false));
+    }
+}
+
+/// One saved assertion per scheduler turn, with the synced rules and no
+/// machine overrides (the same semantics as Engine::test_rules).
+pub fn test_steps(config: Option<PathBuf>, rules: RulesFile) -> impl FnMut() -> Option<Result<TestReport, String>> {
+    let loaded = crate::router::engine_as_routed(
+        &pwrroute_engine::Sources { config, rules: rules.clone(), ..Default::default() },
+        Rc::new(NativeHost::new()), Limits::default(),
+    ).map_err(|e| format!("The rules did not load: {e:#}"));
+    let (mut engine, mut error) = match loaded {
+        Ok(engine) => (Some(engine), None),
+        Err(error) => (None, Some(Err(error))),
+    };
+    let mut sources = Vec::new();
+    for (i, rule) in rules.rules.iter().enumerate() {
+        for j in 0..rule.examples.len() { sources.push(TestSource::RuleExample { rule: i, example: j }); }
+    }
+    for (i, rule) in rules.rewrites.iter().enumerate() {
+        for j in 0..rule.examples.len() { sources.push(TestSource::RewriteExample { rewrite: i, example: j }); }
+    }
+    for i in 0..rules.tests.len() { sources.push(TestSource::Test { test: i }); }
+    let mut sources = sources.into_iter();
+    let mut report = TestReport::default();
+    move || {
+        if let Some(error) = error.take() { return Some(error); }
+        let Some(source) = sources.next() else { return Some(Ok(std::mem::take(&mut report))); };
+        let mut single = rules.clone();
+        for rule in &mut single.rules { rule.examples.clear(); }
+        for rule in &mut single.rewrites { rule.examples.clear(); }
+        single.tests.clear();
+        match source {
+            TestSource::RuleExample { rule, example } => single.rules[rule].examples.push(rules.rules[rule].examples[example].clone()),
+            TestSource::RewriteExample { rewrite, example } => single.rewrites[rewrite].examples.push(rules.rewrites[rewrite].examples[example].clone()),
+            TestSource::Test { test } => single.tests.push(rules.tests[test].clone()),
+        }
+        match single.run_tests(engine.as_ref().expect("loaded")) {
+            Ok(part) => {
+                report.total += part.total;
+                report.passed += part.passed;
+                report.failures.extend(part.failures.into_iter().map(|mut f| { f.source = source; f }));
+                report.console.extend(part.console);
+                let over = report.console.len().saturating_sub(pwrroute_engine::ConsoleLog::CAPACITY);
+                report.console.drain(..over);
+                None
+            }
+            Err(e) => { engine.take(); Some(Err(format!("The tests did not run: {e:#}"))) }
+        }
     }
 }

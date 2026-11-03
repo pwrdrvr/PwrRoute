@@ -916,7 +916,52 @@ impl PwrRoute {
             save,
             added: None,
         });
+        if self.needs_example_probe(&record) {
+            if let Some(menu) = &mut self.actions.menu { menu.save = None; }
+            self.probe_record_example(key, false, cx);
+        }
         cx.notify();
+    }
+
+    fn needs_example_probe(&self, record: &DispatchRecord) -> bool {
+        record.privacy == Privacy::Full && record.browser.is_some()
+            && matches!(matched(record), Some(Matched::Rule { .. } | Matched::Unreported))
+            && !(matches!(matched(record), Some(Matched::Rule { index }) if self.rules_unchanged_since(record.received_at) && self.still_routes(index, record)))
+    }
+
+    fn probe_record_example(&mut self, key: RowKey, save: bool, cx: &mut Context<'_, Self>) {
+        let Some(record) = record(key, cx) else { return; };
+        let revision = self.engine_revision;
+        let rules = self.store.written();
+        let input = self.probe.input();
+        let url = matched_url(&record).to_owned();
+        let opener = engine_opener(&record);
+        let result = self.engine_worker.once(crate::engine_worker::Lane::Activity, move || {
+            let mut probe = crate::try_it::Probe::from_input(input).with_rules(rules);
+            let trace = probe.trace(&url, opener.as_ref());
+            let winner = trace.map(|trace| trace.winner().filter(|step| step.source == pwrroute_engine::Source::Rules && step.stage == pwrroute_engine::Stage::Handler).map(|step| step.index));
+            (winner, probe.stamps())
+        });
+        cx.spawn(async move |this, cx| {
+            if let Ok((winner, stamps)) = result.recv().await {
+                let _ = this.update(cx, |this, cx| {
+                    this.sync_with_disk(cx);
+                    if this.engine_revision != revision || !crate::engine_worker::unchanged(&stamps) { return; }
+                    let Some(record) = record(key, cx).filter(|r| r.privacy == Privacy::Full) else { return; };
+                    match winner {
+                        Ok(handler) if save => this.save_example_to(key, handler, cx),
+                        Ok(handler) => {
+                            let choice = handler.map_or_else(|| Save::Test { expects: opened_label(&record) }, |handler| Save::Example {
+                                handler, pattern: this.handlers.get(handler).and_then(|h| h.patterns.first().cloned()),
+                            });
+                            if let Some(menu) = &mut this.actions.menu && menu.key == key { menu.save = Some(choice); }
+                        }
+                        Err(_) => { this.actions.note = Some((key, "The rules could not be checked. Try again after fixing the config.".into())); }
+                    }
+                    cx.notify();
+                });
+            }
+        }).detach();
     }
 
     /// The `rules.json` rule a record's link joins as an example: the one
@@ -935,11 +980,7 @@ impl PwrRoute {
             {
                 Some(index)
             }
-            Some(Matched::Rule { .. } | Matched::Unreported) => {
-                let url = matched_url(record).to_owned();
-                let opener = engine_opener(record);
-                self.probe.winning_handler(&url, opener.as_ref())
-            }
+            Some(Matched::Rule { .. } | Matched::Unreported) => None,
             Some(Matched::Default { .. } | Matched::Handler { .. }) | None => None,
         }
     }
@@ -1425,8 +1466,16 @@ impl PwrRoute {
         if record.privacy != Privacy::Full {
             return;
         }
+        self.sync_with_disk(cx);
+        if self.needs_example_probe(&record) { self.probe_record_example(key, true, cx); return; }
+        let handler = self.example_rule(&record);
+        self.save_example_to(key, handler, cx);
+    }
+
+    fn save_example_to(&mut self, key: RowKey, handler: Option<usize>, cx: &mut Context<'_, Self>) {
+        let Some(record) = record(key, cx).filter(|r| r.privacy == Privacy::Full) else { return; };
         let url = matched_url(&record).to_owned();
-        match self.example_rule(&record) {
+        match handler {
             Some(handler) => {
                 // A command on the saved rule: it reaches the file even
                 // while the rule is the editor's draft.

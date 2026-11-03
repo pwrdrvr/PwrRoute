@@ -282,7 +282,7 @@ impl Facts {
         Self {
             handler: default_browser::state(cx),
             browsers: choices(crate::browser_scan::apps(cx), &hidden(cx)),
-            finicky: crate::router::config_in_charge().map(FinickyFound::read),
+            finicky: None,
             finicky_rules: discovery::find_finicky_rules(&env),
             rules_default: rules.default_browser,
             rules_profile: rules.default_profile,
@@ -540,30 +540,25 @@ pub fn hooks_with(
                             .as_deref()
                             .and_then(|path| RulesFile::load(path).ok())
                             .unwrap_or_default();
-                        let report = Engine::from_sources(
-                            &pwrroute_engine::Sources {
-                                config,
-                                rules: file,
-                                ..Default::default()
-                            },
-                            Rc::new(pwrroute_engine::NativeHost::new()),
-                            Limits::default(),
-                        )
-                        .and_then(|engine| engine.test_rules(None));
-                        let summary = match report {
-                            Ok(report) => format!(
-                                "Copied {count} entries. Saved examples and tests: {} of {} passed. See Rules for any failures.",
-                                report.passed, report.total
-                            ),
-                            Err(_) => format!(
-                                "Copied {count} entries. Saved examples and tests could not run; see Rules for details."
-                            ),
-                        };
-                        let summary = match source_error {
-                            Some(reason) => format!("{summary} {reason}"),
-                            None => summary,
-                        };
-                        Some((imported(count, keeps_config, rules.as_deref()), summary))
+
+                        let imported = imported(count, keeps_config, rules.as_deref());
+                        let result = crate::engine_worker::service(cx).submit(crate::engine_worker::Lane::Onboarding, std::time::Duration::ZERO, move |_| crate::try_it::test_steps(config, file));
+                        let reply = reply.clone();
+                        cx.spawn(async move |cx| {
+                            if let Ok(report) = result.recv().await {
+                                let summary = match report {
+                                    Ok(report) => format!("Copied {count} entries. Saved examples and tests: {} of {} passed. See Rules for any failures.", report.passed, report.total),
+                                    Err(_) => format!("Copied {count} entries. Saved examples and tests could not run; see Rules for details."),
+                                };
+                                let summary = match &source_error {
+                                    Some(reason) => format!("{summary} {reason}"),
+                                    None => summary,
+                                };
+                                cx.update(|cx| reply(Some((imported, summary)), cx));
+                            }
+                        }).detach();
+                        return;
+
                     }
                 };
                 reply(result, cx);
@@ -813,7 +808,45 @@ pub fn open(cx: &mut App) {
         cx.activate(true);
         return;
     }
+    if cx.try_global::<Opening>().is_some() { return; }
     let facts = Facts::probe(cx);
+    let config = crate::router::config_in_charge();
+    if config.is_none() { open_ready(facts, cx); return; }
+    let request = Rc::new(());
+    cx.set_global(Opening(request.clone()));
+    let expected = config.clone();
+    let result = crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || config.map(FinickyFound::read));
+    cx.spawn(async move |cx| {
+        if let Ok(finicky) = result.recv().await {
+            cx.update(|cx| {
+                if !cx.try_global::<Opening>().is_some_and(|opening| Rc::ptr_eq(&opening.0, &request)) { return; }
+                cx.remove_global::<Opening>();
+                if crate::router::config_in_charge() != expected { open(cx); return; }
+                let mut facts = facts;
+                facts.finicky = finicky;
+                open_ready(facts, cx);
+            });
+        }
+    }).detach();
+}
+
+struct Opening(Rc<()>);
+impl gpui_kit::Global for Opening {}
+
+/// Browser scanning calls this after completing an async scan. It only
+/// updates browser facts; setup choices and config review remain intact.
+pub fn refresh_browsers(cx: &mut App) {
+    let browsers = choices(crate::browser_scan::apps(cx), &hidden(cx));
+    if let Some(window) = cx.try_global::<Open>().map(|open| open.window) {
+        let _ = window.update(cx, |view, _, cx| {
+            view.model.browsers = browsers;
+            view.preselect(cx);
+            cx.notify();
+        });
+    }
+}
+
+fn open_ready(facts: Facts, cx: &mut App) {
     let model = model(&facts, std::env::home_dir().as_deref());
     let window = match first_run::open(model, hooks(), cx) {
         Ok(window) => window,
