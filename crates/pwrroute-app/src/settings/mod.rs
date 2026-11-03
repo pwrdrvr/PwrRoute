@@ -363,8 +363,8 @@ pub fn problem(cx: &mut App, pane: Pane, problem: String) {
         let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
         if let Some(handle) = open {
             let _ = handle.update(cx, |view, _, cx| {
-            if let Some(load) = view.loads.get_mut(&pane) {
-                load.invalidate();
+                if let Some(load) = view.loads.get_mut(&pane) {
+                    load.invalidate();
                 }
                 view.model.pending.remove(&pane);
                 view.model.problems.insert(pane, problem.into());
@@ -482,7 +482,9 @@ fn load_future<T: Send + 'static>(
                                     true
                                 } else {
                                     view.requested.remove(&pane);
-                                    view.model.pending.insert(pane);
+                                    if !view.model.problems.contains_key(&pane) {
+                                        view.model.pending.insert(pane);
+                                    }
                                     cx.notify();
                                     false
                                 }

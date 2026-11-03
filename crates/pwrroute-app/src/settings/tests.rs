@@ -23,6 +23,15 @@ type Requests = Rc<RefCell<Vec<SettingsRequest>>>;
 
 #[gpui_kit::test]
 fn review_a_queued_reopened_pane_keeps_invalidation(cx: &mut TestAppContext) {
+    queued_reopened_pane(cx, false);
+}
+
+#[gpui_kit::test]
+fn review_a_queued_reopened_pane_keeps_a_reported_error(cx: &mut TestAppContext) {
+    queued_reopened_pane(cx, true);
+}
+
+fn queued_reopened_pane(cx: &mut TestAppContext, error: bool) {
     install(cx);
     cx.update(|cx| super::open(cx, Some(Pane::Privacy)));
     let old = settings_windows(cx)[0];
@@ -50,8 +59,13 @@ fn review_a_queued_reopened_pane_keeps_invalidation(cx: &mut TestAppContext) {
             |model, count| model.privacy.keep_count = count,
         );
         super::open(cx, Some(Pane::About));
-        super::reload_now(cx, Pane::Privacy);
+        if error {
+            super::problem(cx, Pane::Privacy, "fixture unavailable".into());
+        } else {
+            super::reload_now(cx, Pane::Privacy);
+        }
     });
+    cx.run_until_parked();
     let reopened = settings_windows(cx)[0];
     release.try_send(()).unwrap();
     cx.run_until_parked();
@@ -61,7 +75,8 @@ fn review_a_queued_reopened_pane_keeps_invalidation(cx: &mut TestAppContext) {
                 view.model.privacy.keep_count, 992,
                 "queued capture was invalidated before it started"
             );
-            assert!(view.model.pending.contains(&Pane::Privacy));
+            assert_eq!(view.model.pending.contains(&Pane::Privacy), !error);
+            assert_eq!(view.model.problems.contains_key(&Pane::Privacy), error);
         })
         .unwrap();
     cx.update(|cx| {
