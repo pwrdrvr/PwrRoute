@@ -359,9 +359,11 @@ fn cached_profiles_keep_their_note_beside_the_chips(cx: &mut TestAppContext) {
     // macOS blocked the live read, so the names come from the cache: the
     // row must say so, or they pass for a fresh read.
     let (_, cx, _) = settings(cx, |model| {
-        model.browsers.detected[0].note = Some("using cached profiles; access blocked".into());
+        let chrome = &mut model.browsers.detected[0];
+        chrome.profiles = vec!["Work".into()];
+        chrome.note = Some("using cached profiles; access blocked".into());
+        model.browsers.detected[1].note = None;
     });
-    assert!(!fixtures::browsers().detected[0].profiles.is_empty());
     assert!(cx.debug_bounds("browsers-profiles-note-0").is_some());
     // A live read has no note under its chips.
     assert!(cx.debug_bounds("browsers-profiles-note-1").is_none());

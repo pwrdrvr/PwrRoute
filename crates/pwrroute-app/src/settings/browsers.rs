@@ -211,26 +211,23 @@ fn app_row_drawn(
     app: &BrowserApp,
     cx: &mut Context<'_, SettingsWindow>,
 ) -> Div {
-    // Cached names (macOS blocked the live read) keep their note under the
-    // chips, so they never pass for a fresh read.
-    let profiles = if app.profiles.is_empty() {
-        div().children(app.note.clone().map(note))
-    } else {
-        let chips = app
-            .profiles
+    // The note sits under the chips too: cached names (macOS blocked the
+    // live read) never pass for a fresh read.
+    let chips = (!app.profiles.is_empty()).then(|| {
+        app.profiles
             .iter()
             .fold(div().flex().flex_wrap().gap(px(4.0)), |chips, profile| {
                 chips.child(tag(profile.clone()))
-            });
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .child(chips)
-            .children(app.note.clone().map(|text| {
-                note(text).debug_selector(move || format!("browsers-profiles-note-{index}"))
-            }))
-    };
+            })
+    });
+    let profiles = div()
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .children(chips)
+        .children(app.note.clone().map(|text| {
+            note(text).debug_selector(move || format!("browsers-profiles-note-{index}"))
+        }));
     let (word, dot) = usage(app);
     let id = match list {
         List::Detected => "browsers-visible",
