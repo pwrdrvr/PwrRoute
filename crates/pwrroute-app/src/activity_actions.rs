@@ -73,6 +73,7 @@ pub struct Actions {
     pub menu_was: Option<RowKey>,
     pub sheet: Option<AddRule>,
     pub note: Option<(RowKey, String)>,
+    example_saves: std::collections::VecDeque<RowKey>,
 }
 
 /// The "⋯" menu of one row, resolved when it opens.
@@ -253,6 +254,8 @@ pub enum ProblemKind {
     /// Another rule, or the config, takes the link first: a second click
     /// adds the rule anyway.
     Shadowed,
+    /// Routing could not be checked; an explicit second click can save it.
+    Unchecked,
 }
 
 impl AddRule {
@@ -1000,7 +1003,27 @@ impl PwrRoute {
     }
 
     fn probe_record_example(&mut self, key: RowKey, save: bool, cx: &mut Context<'_, Self>) {
+        if save {
+            if self.actions.example_saves.contains(&key) { return; }
+            if self.actions.example_saves.len() >= 32 {
+                self.actions.note = Some((key, "Too many example saves are waiting. Try again after they finish.".into()));
+                cx.notify();
+                return;
+            }
+            self.actions.example_saves.push_back(key);
+            if self.actions.example_saves.len() > 1 { return; }
+        }
+        self.start_example_probe(key, save, cx);
+    }
+
+    fn finish_example_save(&mut self, key: RowKey, cx: &mut Context<'_, Self>) {
+        if self.actions.example_saves.front() == Some(&key) { self.actions.example_saves.pop_front(); }
+        if let Some(next) = self.actions.example_saves.front().copied() { self.start_example_probe(next, true, cx); }
+    }
+
+    fn start_example_probe(&mut self, key: RowKey, save: bool, cx: &mut Context<'_, Self>) {
         let Some(record) = record(key, cx) else {
+            if save { self.finish_example_save(key, cx); }
             return;
         };
         let revision = self.engine_revision;
@@ -1008,9 +1031,10 @@ impl PwrRoute {
         let input = self.probe.input();
         let url = matched_url(&record).to_owned();
         let opener = engine_opener(&record);
+        let lane = if save { crate::engine_worker::Lane::ExampleSave } else { crate::engine_worker::Lane::Activity };
         let result = self
             .engine_worker
-            .once(crate::engine_worker::Lane::Activity, move || {
+            .once(lane, move || {
                 let mut probe = crate::try_it::Probe::from_input(input).with_rules(rules);
                 let trace = probe.trace(&url, opener.as_ref());
                 let winner = trace.map(|trace| {
@@ -1024,11 +1048,15 @@ impl PwrRoute {
                 });
                 (winner, probe.stamps())
             });
-        self.engine_tasks[crate::engine_worker::Lane::Activity as usize] = Some(cx.spawn(async move |this, cx| {
+        self.engine_tasks[lane as usize] = Some(cx.spawn(async move |this, cx| {
             if let Ok((winner, stamps)) = crate::engine_worker::receive(result).await {
                 let _ = this.update(cx, |this, cx| {
+                    (|this: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>| {
                     this.sync_with_disk(cx);
-                    if this.engine_revision != revision || !crate::engine_worker::unchanged(&stamps) { return; }
+                    if this.engine_revision != revision || !crate::engine_worker::unchanged(&stamps) {
+                        if save { this.actions.note = Some((key, "The rules changed before the example could be saved. Try again.".into())); }
+                        return;
+                    }
                     let Some(record) = crate::activity_actions::record(key, cx).filter(|r| r.privacy == Privacy::Full) else { return; };
                     match winner {
                         Ok(handler) if save => this.save_example_to(key, handler, cx),
@@ -1040,6 +1068,8 @@ impl PwrRoute {
                         }
                         Err(_) => { this.actions.note = Some((key, "The rules could not be checked. Try again after fixing the config.".into())); }
                     }
+                    })(this, cx);
+                    if save { this.finish_example_save(key, cx); }
                     cx.notify();
                 });
             }
@@ -1627,7 +1657,13 @@ impl PwrRoute {
                                 }
                             }
                             Err(error) => {
-                                sheet.collision_error = Some(error);
+                                sheet.collision_error = None;
+                                sheet.problem = Some(Problem {
+                                    kind: ProblemKind::Unchecked,
+                                    text: format!("The config could not be checked: {error}"),
+                                    advice: "Fix the config and try again, or click Add anyway.",
+                                });
+                                sheet.verified = Some((rule, at, revision, stamps));
                             }
                         }
                         cx.notify();

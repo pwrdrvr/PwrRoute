@@ -1013,6 +1013,7 @@ pub fn test_steps(
         || before.clone(),
         |engine| crate::engine_worker::dependencies(before.clone(), engine),
     );
+    let rules = engine.as_ref().map(|engine| engine.rules().clone()).unwrap_or(rules);
     let mut sources = Vec::new();
     for (i, rule) in rules.rules.iter().enumerate() {
         for j in 0..rule.examples.len() {

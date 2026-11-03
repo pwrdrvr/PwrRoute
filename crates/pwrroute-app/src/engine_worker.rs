@@ -21,10 +21,11 @@ pub enum Lane {
     Import,
     Onboarding,
     Activity,
+    ExampleSave,
     Collisions,
     CheckRule,
 }
-pub const LANES: usize = 10;
+pub const LANES: usize = 11;
 enum Progress {
     Yield,
     Waiting,

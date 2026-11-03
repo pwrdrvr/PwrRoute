@@ -287,7 +287,17 @@ pub struct Facts {
 }
 
 impl Facts {
-    fn refresh_saved(&mut self) { let _ = (&self.rules_path, &self.state_dir); }
+    fn refresh_saved(&mut self) {
+        if let Some(rules) = self.rules_path.as_deref().and_then(|path| RulesFile::load(path).ok()) {
+            self.rules_default = rules.default_browser;
+            self.rules_profile = rules.default_profile;
+            self.rules = rules.rules.len();
+            self.precedence = rules.precedence;
+        }
+        if let Some(state) = self.state_dir.as_deref().and_then(|dir| State::load(dir).ok()) {
+            self.state = state;
+        }
+    }
 
     /// Reads the machine: the OS's answer on the default browser (already
     /// read by [`default_browser`]), the installed browsers (the shared
@@ -973,7 +983,7 @@ struct Opening {
     stamps: crate::engine_worker::Stamps,
 }
 impl gpui_kit::Global for Opening {}
-struct Preparing {
+pub(crate) struct Preparing {
     failure: Option<String>,
 }
 impl Render for Preparing {
@@ -1063,19 +1073,7 @@ pub fn refresh_browsers(cx: &mut App) {
     for window in cx.windows() {
         if let Some(window) = window.downcast::<FirstRun>() {
             let _ = window.update(cx, |view, _, cx| {
-                let before = view.model.still_blocked().len();
-                view.model.browsers_loading = loading;
-                view.model.browser_error = error.clone();
-                if !loading && error.is_none() {
-                    view.model.browsers = browsers.clone();
-                    if view.model.still_blocked().len() < before
-                        && let Some(access) = &mut view.model.access
-                    {
-                        access.still_blocked = false;
-                    }
-                    view.preselect(cx);
-                }
-                cx.notify();
+                view.browser_scan_completed(browsers.clone(), loading, error.clone(), cx);
             });
         }
     }
