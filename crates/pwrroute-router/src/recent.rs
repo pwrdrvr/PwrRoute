@@ -122,10 +122,19 @@ impl RecentDispatches {
         if inner.retention.count == 0 {
             return;
         }
+        // I/O completes out of receipt order. Activity's newest-first order
+        // and count retention still describe receipt, not worker speed.
+        let newer = |other: &DispatchRecord| {
+            (other.received_at, other.id) > (record.received_at, record.id)
+        };
         if let Some(link) = link {
-            inner.waiting.push_front((record.id, link));
+            let index = inner.waiting.iter().take_while(|(id, _)| {
+                inner.records.iter().find(|other| other.id == *id).is_some_and(newer)
+            }).count();
+            inner.waiting.insert(index, (record.id, link));
         }
-        inner.records.push_front(record);
+        let index = inner.records.iter().take_while(|other| newer(other)).count();
+        inner.records.insert(index, record);
         inner.sweep(SystemTime::now());
     }
 

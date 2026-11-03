@@ -632,7 +632,7 @@ enum Command {
 }
 
 struct Queued {
-    permit: Permit,
+    _permit: Permit,
     id: DispatchId,
     link: Link,
     forwarded: bool,
@@ -1150,7 +1150,7 @@ impl RouterHandle {
     fn request(&self, link: Link, forwarded: bool) -> std::result::Result<Queued, RouterGone> {
         let permit = self.admission.acquire()?;
         Ok(Queued {
-            permit,
+            _permit: permit,
             id: DispatchId(self.next_id.fetch_add(1, Ordering::Relaxed)),
             link,
             forwarded,
@@ -1239,7 +1239,7 @@ impl Worker {
         log::log!(target: "pwrroute::link", level, "{}", record.log_line());
     }
 
-    fn process(&mut self, request: &Queued, mode: &Mode, expanded: &EngineLink, took: pipeline::Reservation) -> DispatchRecord {
+    fn process(&mut self, request: &Queued, mode: &Mode, expanded: &EngineLink, took: pipeline::Reservation, refresh_error: Option<String>) -> DispatchRecord {
         let dequeued = Instant::now();
         let mut record = DispatchRecord {
             id: request.id,
@@ -1276,7 +1276,7 @@ impl Worker {
         }
 
         let (mut browser, privacy) =
-            self.resolve(expanded, &record.link, &mut record.steps);
+            self.resolve(expanded, &record.link, &mut record.steps, refresh_error);
         // An override takes the link after the rules ran (so the rewrites
         // and the privacy level stand), from whatever they chose. A test
         // still reports what the rules say.
@@ -1299,12 +1299,16 @@ impl Worker {
                     privacy = browser.privacy;
                 }
                 Some(Took::Held(sent)) => {
-                    record.steps.push(Step::Held {
-                        held: sent,
-                        skipped: skipped_handler(&record.steps),
-                        browser: (browser.app_type != AppType::None).then(|| browser.clone()),
-                    });
-                    held = true;
+                    // Retention can change while a reserved hold expands.
+                    // Never hold a link that would have nowhere to wait.
+                    if self.recent.retention().count > 0 {
+                        record.steps.push(Step::Held {
+                            held: sent,
+                            skipped: skipped_handler(&record.steps),
+                            browser: (browser.app_type != AppType::None).then(|| browser.clone()),
+                        });
+                        held = true;
+                    }
                 }
                 None => {}
             },
@@ -1364,9 +1368,12 @@ impl Worker {
         expanded: &EngineLink,
         link: &Link,
         steps: &mut Vec<Step>,
+        refresh_error: Option<String>,
     ) -> (Browser, Privacy) {
         let url = expanded.original_url.as_str();
-        let resolver = match self.in_charge() {
+        let resolver = match refresh_error.map_or_else(
+            || self.resolver.as_ref().map(|resolver| resolver.as_ref()).map_err(Clone::clone), Err
+        ) {
             Ok(resolver) => resolver,
             Err(reason) => {
                 steps.push(Step::Fallback { reason });

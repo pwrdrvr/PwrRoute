@@ -705,7 +705,7 @@ impl Launcher for BrowserLauncher {
     fn ordering_key(&self, browser: &Browser) -> String {
         let catalog = pwrroute_browsers::Catalog::builtin();
         catalog.find(&browser.name)
-            .or_else(|| catalog.find_by_path(crate::browser_scan::environment().platform, Path::new(&browser.name)))
+            .or_else(|| catalog.find_by_path(pwrroute_browsers::Platform::current(), Path::new(&browser.name)))
             .map_or_else(|| browser.name.to_ascii_lowercase(), |entry| entry.id.clone())
     }
 
