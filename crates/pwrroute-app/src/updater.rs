@@ -34,7 +34,10 @@ use std::{
     cmp::Ordering as Precedence,
     fmt, fs,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock, PoisonError},
+    sync::{
+        Mutex, OnceLock, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, SystemTime},
 };
@@ -58,6 +61,10 @@ const HELD_FILE: &str = "updates.json";
 /// design's "At startup and every 6 hours while running". A Velopack
 /// install only; a dev build has nothing to check.
 pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Shutdown prevents new discovery pages and later feed/download phases.
+/// In-flight blocking I/O finishes under its timeout; this is cooperative.
+static STOPPING: AtomicBool = AtomicBool::new(false);
 
 /// What [`run_startup_hooks`] tells Velopack, apart from the hooks. Kept
 /// as data so a test can hold the policy without a Velopack install.
@@ -121,6 +128,7 @@ pub enum QuitApply {
 /// quit goes on; PwrRoute is not started again, and the next link opens
 /// the new version.
 pub fn apply_pending_on_quit() {
+    STOPPING.store(true, Ordering::Release);
     match apply_pending() {
         QuitApply::Nothing => {}
         QuitApply::Applying(version) => {
@@ -525,6 +533,11 @@ pub fn install(cx: &mut App) {
     if CHANGED.set(tx).is_err() {
         return;
     }
+    cx.on_app_quit(|_| {
+        STOPPING.store(true, Ordering::Release);
+        async {}
+    })
+    .detach();
     if let Some(store) = crate::settings_store::store(cx) {
         let settings = store.read(cx).settings().updates;
         update(|updater| updater.selection = settings);
@@ -600,6 +613,9 @@ pub fn installation() -> Installation {
 /// Check for an update, and download it, on a thread of its own: Velopack's
 /// client blocks, and a download can take a while.
 pub fn check_in_background(trigger: Trigger) {
+    if STOPPING.load(Ordering::Acquire) {
+        return;
+    }
     let installed = installed_version();
     match update(|updater| updater.request(trigger, &installed)) {
         Some(check) => spawn_check(check),
@@ -801,6 +817,9 @@ fn plan(
 }
 
 fn check_and_download(check: Check) -> Outcome {
+    if STOPPING.load(Ordering::Acquire) {
+        return Outcome::Failed("update check was cancelled during shutdown".into());
+    }
     // The installed version (Velopack's sq.version), not the one compiled
     // in: packages are stamped separately from Cargo.toml.
     let locator = match locator::auto_locate_app_manifest(LocationContext::FromCurrentExe) {
@@ -809,7 +828,7 @@ fn check_and_download(check: Check) -> Outcome {
     };
     let installed = locator.get_manifest_version().to_string();
     let slot = check.slot;
-    let releases = github_releases::fetch(&locator.get_manifest_channel());
+    let releases = github_releases::fetch(&locator.get_manifest_channel(), &STOPPING);
     update_check(check, |updater| updater.releases = Some(releases.clone()));
     let releases = match releases {
         Ok(releases) => releases,
@@ -838,8 +857,14 @@ fn check_and_download(check: Check) -> Outcome {
         Ok(manager) => manager,
         Err(error) => return Outcome::NotInstalled(error.to_string()),
     };
+    if STOPPING.load(Ordering::Acquire) {
+        return Outcome::Failed("update check was cancelled during shutdown".into());
+    }
     match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(update)) => {
+            if STOPPING.load(Ordering::Acquire) {
+                return Outcome::Failed("update check was cancelled during shutdown".into());
+            }
             let target = &update.TargetFullRelease;
             if let Err(error) = download(check, &manager, &update, switch_back) {
                 return Outcome::Failed(error.to_string());
