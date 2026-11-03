@@ -136,6 +136,7 @@ struct Opens {
 struct Baseline {
     links: Vec<(String, Option<Opener>)>,
     now: Vec<Option<Opens>>,
+    stamps: crate::engine_worker::Stamps,
 }
 
 fn opens(probe: &mut Probe, url: &str, opener: Option<&Opener>) -> Option<Opens> {
@@ -289,6 +290,9 @@ impl PwrRoute {
         to: usize,
         cx: &mut Context<'_, Self>,
     ) -> Option<usize> {
+        if self.row_actions.baseline.as_ref().is_some_and(|baseline| !crate::engine_worker::unchanged(&baseline.stamps)) {
+            self.row_actions.forget_counts();
+        }
         if let Some(count) = self.row_actions.impacts.get(&(selection, to)) {
             return *count;
         }
@@ -317,25 +321,31 @@ impl PwrRoute {
             move |_| {
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
                 let mut probe = Probe::from_input(input).with_rules(saved);
-                let mut baseline = baseline.unwrap_or(Baseline {
+                let mut baseline = baseline.filter(|b| crate::engine_worker::unchanged(&b.stamps)).unwrap_or(Baseline {
                     links,
                     now: Vec::new(),
+                    stamps: Vec::new(),
                 });
+                let mut stamps = baseline.stamps.clone();
                 let mut moves = moves.into_iter();
                 let mut current: Option<((Selection, usize), Probe, usize, usize)> = None;
                 let mut counts = HashMap::new();
                 move || {
                     if std::time::Instant::now() >= deadline {
-                        return Some((baseline.clone(), counts.clone(), probe.stamps()));
+                        return Some((baseline.clone(), counts.clone(), stamps.clone()));
                     }
                     if baseline.now.len() < baseline.links.len() {
                         let (url, opener) = &baseline.links[baseline.now.len()];
                         baseline.now.push(opens(&mut probe, url, opener.as_ref()));
+                        // Keep each observed version: a module changed mid-batch
+                        // must invalidate every route calculated before that change.
+                        crate::engine_worker::retain_stamps(&mut baseline.stamps, probe.stamps());
+                        crate::engine_worker::retain_stamps(&mut stamps, probe.stamps());
                         return None;
                     }
                     if current.is_none() {
                         let Some(key @ (selection, to)) = moves.next() else {
-                            return Some((baseline.clone(), counts.clone(), probe.stamps()));
+                            return Some((baseline.clone(), counts.clone(), stamps.clone()));
                         };
                         let mut moved = store.clone();
                         if moved.move_to(selection, to).is_none() {
@@ -347,6 +357,7 @@ impl PwrRoute {
                     let (key, after, index, changed) = current.as_mut().unwrap();
                     let (url, opener) = &baseline.links[*index];
                     let next = opens(after, url, opener.as_ref());
+                    crate::engine_worker::retain_stamps(&mut stamps, after.stamps());
                     if next.is_none() || baseline.now[*index].is_none() {
                         counts.insert(*key, None);
                         current = None;
@@ -364,13 +375,14 @@ impl PwrRoute {
         );
         self.engine_tasks[crate::engine_worker::Lane::Impact as usize] =
             Some(cx.spawn(async move |this, cx| {
-                if let Ok((baseline, counts, stamps)) = crate::engine_worker::receive(result).await
+                if let Ok((mut baseline, counts, stamps)) = crate::engine_worker::receive(result).await
                 {
                     let _ = this.update(cx, |this, cx| {
                         if this.engine_revision == revision
                             && std::rc::Rc::ptr_eq(&this.row_actions.request, &request)
                             && crate::engine_worker::unchanged(&stamps)
                         {
+                            crate::engine_worker::retain_stamps(&mut baseline.stamps, stamps);
                             this.row_actions.baseline = Some(baseline);
                             this.row_actions.impacts.extend(counts);
                             cx.notify();

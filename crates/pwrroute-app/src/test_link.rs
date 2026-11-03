@@ -133,6 +133,7 @@ pub struct TestLink {
     pub saved_as: Option<usize>,
     task: Option<gpui_kit::Task<()>>,
     worker: crate::engine_worker::Client,
+    io: crate::engine_worker::IoWorker,
     config: Option<PathBuf>,
     /// The config as the user knows it (`~/.finicky.ts`), for the trace's
     /// last step: whose default took the link.
@@ -181,6 +182,7 @@ impl TestLink {
             config,
             task: None,
             worker,
+            io: crate::engine_worker::IoWorker::new(),
             rules,
             machine: crate::sync::machine(),
             run: None,
@@ -236,6 +238,7 @@ impl TestLink {
         self.task = None;
         self.request_token = Rc::new(());
         self.worker.cancel(crate::engine_worker::Lane::Link);
+        self.io.cancel();
         self.expanding = false;
         self.copied = false;
         self.saved_as = None;
@@ -271,10 +274,11 @@ impl TestLink {
             machine: self.machine.clone(),
         };
         // Fetch the window's bounded worker without borrowing PwrRoute.
-        let worker = self.worker.submit(
+        let io = self.io.client();
+        let worker = self.worker.submit_poll(
             crate::engine_worker::Lane::Link,
             Duration::ZERO,
-            move |_| {
+            move |_, wake| {
                 let before = crate::engine_worker::primary(sources.config.as_deref());
                 let engine = crate::router::engine_as_routed(
                     &sources,
@@ -291,28 +295,43 @@ impl TestLink {
                     bundle_id: app.bundle_id.to_string(),
                     ..Default::default()
                 });
+                let mut expansion = None;
                 let mut link = None;
                 move || {
+                    use std::task::Poll;
                     let engine = match &engine {
                         Ok(engine) => engine,
-                        Err(error) => return Some((Err(error.clone()), stamps.clone())),
+                        Err(error) => return Poll::Ready(Some((Err(error.clone()), stamps.clone()))),
                     };
                     if link.is_none() {
-                        link = Some(if engine.short_links().is_short(&url) {
-                            let network = network
-                                .clone()
-                                .unwrap_or_else(|| Arc::new(HttpNetwork::new()));
-                            engine.short_links().expand(&url, network.as_ref())
+                        if !engine.short_links().is_short(&url) {
+                            link = Some(Link::new(&url));
                         } else {
-                            Link::new(&url)
-                        });
-                        return None;
+                            if expansion.is_none() {
+                                let policy = engine.short_links().clone();
+                                let url = url.clone();
+                                let network = network.clone();
+                                expansion = Some(io.submit(wake.clone(), move || {
+                                    let network = network.unwrap_or_else(|| Arc::new(HttpNetwork::new()));
+                                    policy.expand(&url, network.as_ref())
+                                }));
+                            }
+                            match expansion.as_ref().unwrap().try_recv() {
+                                Ok(expanded) => link = Some(expanded),
+                                Err(async_channel::TryRecvError::Empty) => return Poll::Pending,
+                                Err(async_channel::TryRecvError::Closed) => return Poll::Ready(Some((Err("Link test cancelled".into()), stamps.clone()))),
+                            }
+                        }
                     }
-                    let trace = engine
-                        .trace(link.as_ref().unwrap(), engine_opener.as_ref())
-                        .map_err(|e| format!("The rules failed: {e:#}"));
-                    Some((trace, stamps.clone()))
+                    // The same engine and immutable expansion policy are retained
+                    // while parked. Reject changed modules before executing a trace.
+                    let trace = if crate::engine_worker::unchanged(&stamps) {
+                        engine.trace(link.as_ref().unwrap(), engine_opener.as_ref())
+                            .map_err(|e| format!("The rules failed: {e:#}"))
+                    } else { Err("Config changed while expanding the link".into()) };
+                    Poll::Ready(Some((trace, stamps.clone())))
                 }
+
             },
         );
         // opener is also needed by the UI; re-read its immutable choice.
@@ -441,6 +460,7 @@ impl TestLink {
         self.task = None;
         self.request_token = Rc::new(());
         self.worker.cancel(crate::engine_worker::Lane::Link);
+        self.io.cancel();
         self.expanding = false;
         // An app only the old rules named is gone from the picker.
         if self.opener >= self.openers().len() {

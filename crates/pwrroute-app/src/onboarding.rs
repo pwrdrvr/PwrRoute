@@ -176,33 +176,32 @@ pub struct FinickyFound {
 }
 
 impl FinickyFound {
+    #[cfg(test)]
+    fn read(path: PathBuf) -> Self { Self::read_with_stamps(path).0 }
+
+    /// Evaluate and review on the engine owner, retaining every module the
+    /// review depends on until first run can actually open.
     fn read_with_stamps(path: PathBuf) -> (Self, crate::engine_worker::Stamps) {
-        let stamps = crate::engine_worker::primary(Some(&path));
-        (Self::read(path), stamps)
-    }
-    /// Reads the config at `path`: evaluating it, as the Rules screen does,
-    /// to count its rules and the ones that import, and to read its
-    /// default. A config that fails to load is still found, with the
-    /// reason.
-    pub fn read(path: PathBuf) -> Self {
+        let before = crate::engine_worker::primary(Some(&path));
         let engine = match Engine::load(&path, Rc::new(NativeHost::new()), Limits::default()) {
             Ok(engine) => engine,
             Err(error) => {
-                return Self {
+                return (Self {
                     error: Some(format!("{error:#}")),
                     path,
                     ..Self::default()
-                };
+                }, before);
             }
         };
+        let stamps = crate::engine_worker::dependencies(before, &engine);
         let description = match engine.describe() {
             Ok(description) => description,
             Err(error) => {
-                return Self {
+                return (Self {
                     error: Some(format!("{error:#}")),
                     path,
                     ..Self::default()
-                };
+                }, stamps);
             }
         };
         let (rewrites, handlers, default) = description.map_or((0, 0, None), |config| {
@@ -237,7 +236,7 @@ impl FinickyFound {
             ),
             None => (None, None),
         };
-        Self {
+        (Self {
             path,
             rewrites,
             handlers,
@@ -245,7 +244,7 @@ impl FinickyFound {
             default_browser,
             default_profile,
             error: None,
-        }
+        }, stamps)
     }
 }
 
@@ -890,6 +889,7 @@ fn prepare(facts: Facts, config: Option<PathBuf>, cx: &mut App) {
         facts,
         config: config.clone(),
         config_ready: config.is_none(),
+        stamps: Vec::new(),
     });
     cx.activate(true);
     if config.is_some() {
@@ -915,6 +915,7 @@ fn prepare(facts: Facts, config: Option<PathBuf>, cx: &mut App) {
                     let opening = cx.global_mut::<Opening>();
                     opening.facts.finicky = finicky;
                     opening.config_ready = true;
+                    opening.stamps = stamps;
                     finish_opening(cx);
                 });
             }
@@ -952,6 +953,7 @@ struct Opening {
     facts: Facts,
     config: Option<PathBuf>,
     config_ready: bool,
+    stamps: crate::engine_worker::Stamps,
 }
 impl gpui_kit::Global for Opening {}
 struct Preparing {
@@ -1011,7 +1013,9 @@ fn finish_opening(cx: &mut App) {
         return;
     };
     let window = opening.window;
-    if opening.config != crate::router::config_in_charge() {
+    if opening.config != crate::router::config_in_charge()
+        || (opening.config_ready && !crate::engine_worker::unchanged(&opening.stamps))
+    {
         restart_opening(cx);
         return;
     }
