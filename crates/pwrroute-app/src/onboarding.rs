@@ -2687,12 +2687,12 @@ mod tests {
         State::default().save(dir.path()).unwrap();
         snapshot.refresh_saved();
         let current = model(&snapshot, None);
-        assert_eq!(current.fallback.as_ref().unwrap().name.as_ref(), "Firefox");
+        assert_eq!(current.fallback.as_ref().unwrap().name.as_str(), "Firefox");
         assert_eq!(snapshot.rules_profile, "Saved profile");
         State { fallback: Some("com.google.Chrome".into()), fallback_profile: Some("Saved state".into()), ..Default::default() }.save(dir.path()).unwrap();
         snapshot.refresh_saved();
         let current = model(&snapshot, None);
-        assert_eq!(current.fallback.as_ref().unwrap().name.as_ref(), "Google Chrome");
+        assert_eq!(current.fallback.as_ref().unwrap().name.as_str(), "Google Chrome");
         assert_eq!(snapshot.state.fallback_profile.as_deref(), Some("Saved state"));
         assert_eq!(RulesFile::load(&path).unwrap().default_browser, "org.mozilla.firefox");
     }
