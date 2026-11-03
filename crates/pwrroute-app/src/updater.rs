@@ -65,6 +65,8 @@ pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// One check at a time: a second "Check for Updates…" while the startup
 /// check is still downloading would only contend for Velopack's lock.
 static CHECKING: AtomicBool = AtomicBool::new(false);
+/// A restart to update is under way: a second press waits for it.
+static RESTARTING: AtomicBool = AtomicBool::new(false);
 
 /// What [`run_startup_hooks`] tells Velopack, apart from the hooks. Kept
 /// as data so a test can hold the policy without a Velopack install.
@@ -211,6 +213,58 @@ pub struct State {
     pub releases: Option<Result<Vec<Release>, String>>,
     /// The package downloaded and not installed yet, and its slot.
     pub held: Option<Held>,
+    /// The download running now, if the check found one to fetch.
+    pub download: Option<Download>,
+    /// How many checks have finished this launch: a check asked for from
+    /// the menu waits for the next one (`update_notice`).
+    pub finished: u64,
+    /// Restart to update was pressed and has not failed: the process is
+    /// about to be replaced ([`restart_in_background`]).
+    pub restarting: bool,
+}
+
+/// A download in progress.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Download {
+    /// Velopack's version: "0.1.1".
+    pub version: String,
+    /// Older than this copy: Restart to switch installs it.
+    pub switch_back: bool,
+    /// 0-100, once Velopack has said.
+    pub percent: Option<u8>,
+}
+
+/// A downloaded release Restart to update installs now: held for the slot
+/// in force and not this very version (what Settings › Updates shows as
+/// Ready or Switch ready).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ready {
+    pub version: String,
+    /// Older than this copy: "Restart to switch".
+    pub switch_back: bool,
+}
+
+/// The release Restart to update would install, for the slot `selection`
+/// resolves to on `installed`; `None` when nothing is held for it.
+pub fn ready_in(installed: &str, selection: &UpdateSettings, state: &State) -> Option<Ready> {
+    let slot = selection.resolve(installed);
+    state
+        .held
+        .as_ref()
+        .filter(|held| held.is_for(slot) && held.version != installed)
+        .map(|held| Ready {
+            version: held.version.clone(),
+            switch_back: held.switch_back,
+        })
+}
+
+/// [`ready_in`] for this copy as it stands. Only a Velopack install can
+/// have one.
+pub fn ready() -> Option<Ready> {
+    match installation() {
+        Installation::Velopack { version } => ready_in(&version, &selection(), &state()),
+        Installation::NotInstalled { .. } => None,
+    }
 }
 
 static STATE: Mutex<State> = Mutex::new(State {
@@ -218,6 +272,9 @@ static STATE: Mutex<State> = Mutex::new(State {
     last: None,
     releases: None,
     held: None,
+    download: None,
+    finished: 0,
+    restarting: false,
 });
 
 /// The release channel as `settings.json` has it; [`set_selection`] keeps
@@ -256,6 +313,20 @@ pub fn installed_version() -> String {
 /// Wakes [`install`]'s task after every change to [`state`].
 static CHANGED: OnceLock<async_channel::Sender<()>> = OnceLock::new();
 
+/// A surface that follows the updater (`update_notice`): called on the
+/// GPUI thread after every change to [`state`], it reads it again.
+pub type Listener = fn(&mut App);
+
+static LISTENERS: Mutex<Vec<Listener>> = Mutex::new(Vec::new());
+
+/// Calls `listener` after every change to [`state`] from now on.
+pub fn on_change(listener: Listener) {
+    LISTENERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(listener);
+}
+
 /// The updater's state as it stands.
 pub fn state() -> State {
     STATE.lock().unwrap_or_else(PoisonError::into_inner).clone()
@@ -288,6 +359,13 @@ pub fn install(cx: &mut App) {
             cx.update(|cx| {
                 let updates = crate::settings::updates_host::model();
                 crate::settings::update(cx, move |model| model.updates = updates);
+                let listeners = LISTENERS
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone();
+                for listener in listeners {
+                    listener(cx);
+                }
             });
         }
     })
@@ -350,6 +428,8 @@ pub fn check_in_background(trigger: Trigger) {
             log(trigger, &outcome);
             set_state(|state| {
                 state.checking = false;
+                state.download = None;
+                state.finished += 1;
                 state.last = Some((SystemTime::now(), outcome));
             });
         });
@@ -359,6 +439,8 @@ pub fn check_in_background(trigger: Trigger) {
         log(trigger, &outcome);
         set_state(|state| {
             state.checking = false;
+            state.download = None;
+            state.finished += 1;
             state.last = Some((SystemTime::now(), outcome));
         });
     }
@@ -386,6 +468,33 @@ pub fn restart_to_update() -> Result<(), String> {
     manager
         .apply_updates_and_restart(&pending)
         .map_err(|e| e.to_string())
+}
+
+/// [`restart_to_update`] on a thread of its own: Velopack exits this
+/// process once the package is applied, so nothing waits on it. Settings,
+/// the tray, the strip and the update toast all restart through this.
+/// One restart at a time ([`State::restarting`]); a failed one clears
+/// it, so the surfaces offer Restart again.
+pub fn restart_in_background() {
+    if RESTARTING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    set_state(|state| state.restarting = true);
+    let failed = |error: String| {
+        log::warn!("updates: could not restart to update: {error}");
+        RESTARTING.store(false, Ordering::Release);
+        set_state(|state| state.restarting = false);
+    };
+    let spawned = thread::Builder::new()
+        .name("pwrroute-restart".to_owned())
+        .spawn(move || {
+            if let Err(error) = restart_to_update() {
+                failed(error);
+            }
+        });
+    if let Err(error) = spawned {
+        failed(error.to_string());
+    }
 }
 
 /// A downloaded package and the slot it was downloaded for. Velopack keeps
@@ -538,7 +647,7 @@ fn check_and_download(trigger: Trigger) -> Outcome {
     match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(update)) => {
             let target = &update.TargetFullRelease;
-            if let Err(error) = manager.download_updates(&update, None) {
+            if let Err(error) = download(&manager, &update, switch_back) {
                 return Outcome::Failed(error.to_string());
             }
             let held = Held {
@@ -560,6 +669,41 @@ fn check_and_download(trigger: Trigger) -> Outcome {
         }
         Err(error) => Outcome::Failed(error.to_string()),
     }
+}
+
+/// Downloads `update`, keeping [`State::download`]'s percent current.
+fn download(
+    manager: &UpdateManager,
+    update: &velopack::UpdateInfo,
+    switch_back: bool,
+) -> Result<(), velopack::Error> {
+    set_state(|state| {
+        state.download = Some(Download {
+            version: update.TargetFullRelease.Version.clone(),
+            switch_back,
+            percent: None,
+        });
+    });
+    let (progress, percents) = std::sync::mpsc::channel::<i16>();
+    // Ends when Velopack drops the sender, at the end of the download.
+    let follow = thread::Builder::new()
+        .name("pwrroute-download".to_owned())
+        .spawn(move || {
+            let mut last = None;
+            for percent in percents {
+                let percent = u8::try_from(percent.clamp(0, 100)).unwrap_or(0);
+                if last != Some(percent) {
+                    last = Some(percent);
+                    set_state(|state| {
+                        if let Some(download) = &mut state.download {
+                            download.percent = Some(percent);
+                        }
+                    });
+                }
+            }
+        });
+    let progress = follow.is_ok().then_some(progress);
+    manager.download_updates(update, progress)
 }
 
 /// Whether `held`'s package is still in Velopack's packages directory.

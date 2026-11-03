@@ -352,6 +352,45 @@ fn the_sync_row_comes_and_goes_with_the_card(cx: &mut TestAppContext) {
     assert_eq!(opened.window_height(), before);
 }
 
+/// A release becomes ready while the dropdown is open: its banner leads
+/// the card, above the held links and the recents, and the window grows
+/// with it; installed (gone), the card is as before.
+#[gpui_kit::test]
+fn the_update_banner_leads_the_card_while_a_release_is_ready(cx: &mut TestAppContext) {
+    use super::dropdown::{HEADER_ID, UPDATE_ID, UPDATE_RESTART_ID};
+    let mut opened = open(TrayModel::fixture(SystemTime::now()), cx);
+    assert!(opened.cx.debug_bounds(UPDATE_ID).is_none());
+    let before = opened.window_height();
+
+    opened.update_model(|model| {
+        model.update = Some(crate::updater::Ready {
+            version: "0.15.0".into(),
+            switch_back: false,
+        });
+    });
+    let banner = opened
+        .cx
+        .debug_bounds(UPDATE_ID)
+        .expect("the update banner");
+    let header = opened.cx.debug_bounds(HEADER_ID).expect("the header");
+    let restart = opened
+        .cx
+        .debug_bounds(UPDATE_RESTART_ID)
+        .expect("its Restart");
+    assert!(banner.top() >= header.bottom(), "under the header");
+    assert!(
+        restart.right() <= banner.right(),
+        "Restart inside the banner"
+    );
+    assert_card_fits(&mut opened);
+    assert!(opened.window_height() > before);
+
+    opened.update_model(|model| model.update = None);
+    assert!(opened.cx.debug_bounds(UPDATE_ID).is_none());
+    assert_card_fits(&mut opened);
+    assert_eq!(opened.window_height(), before);
+}
+
 /// Recent links arriving while the dropdown is open grow the window with
 /// the card, up to the recents' limit.
 #[gpui_kit::test]

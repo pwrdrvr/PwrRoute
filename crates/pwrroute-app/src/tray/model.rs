@@ -803,6 +803,10 @@ pub struct TrayModel {
     pub choices: DestinationChoices,
     /// Sync's row, while rules sync with a folder (`sync::tray_row_of`).
     pub sync: Option<SyncRow>,
+    /// A release downloaded for the slot in force (`updater::ready`): the
+    /// dropdown's banner and the native menu's Restart to update row
+    /// (design: Updates and Default Browser 1c).
+    pub update: Option<crate::updater::Ready>,
     /// "Add a rule for the next link" is armed: the router holds the next
     /// link for a rule (`RouterHandle::catch_next`; design: Tray Quick Add
     /// Rule 2b).
@@ -878,6 +882,7 @@ impl TrayModel {
                 scanned: true,
             },
             sync: None,
+            update: None,
             catching: false,
         }
     }
@@ -901,6 +906,7 @@ impl TrayModel {
             can_hold: true,
             choices: DestinationChoices::default(),
             sync: None,
+            update: None,
             catching: false,
         }
     }

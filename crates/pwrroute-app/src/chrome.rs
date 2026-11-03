@@ -132,8 +132,13 @@ pub fn current(cx: &App) -> Chrome {
 pub const STRIP_HEIGHT: f32 = 40.0;
 
 /// The strip's status chips for what is on screen.
-fn strip_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
+fn strip_chips(app: &PwrRoute, status: &Status, cx: &App) -> Vec<Div> {
     let mut chips = screen_chips(app, status);
+    // A release ready to install, after the rules chip on every screen
+    // (design: Updates and Default Browser 1d).
+    if let Some(ready) = crate::update_notice::ready(cx) {
+        chips.push(update_chip(&ready));
+    }
     // Only a sync conflict or pause earns a chip (design: Synced Rules 3b).
     if let Some(line) = &app.sync_line
         && let Some(chip) = line.chip
@@ -145,6 +150,51 @@ fn strip_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
         chips.push(status_chip(chip, dot));
     }
     chips
+}
+
+/// The strip's id for the update chip, for tests and E2E.
+pub const UPDATE_CHIP_ID: &str = "strip-update";
+
+/// "0.15.0 ready · Restart": an accent chip whose underlined verb is the
+/// action. It leaves on its own once the release is installed.
+fn update_chip(ready: &crate::updater::Ready) -> Div {
+    let verb = if ready.switch_back {
+        "Switch"
+    } else {
+        "Restart"
+    };
+    div().child(
+        crate::widgets::keyboard_control(
+            div()
+                .id(UPDATE_CHIP_ID)
+                .debug_selector(|| UPDATE_CHIP_ID.into())
+                .role(gpui_kit::Role::Button)
+                .aria_label(crate::update_notice::restart_label(ready)),
+            false,
+        )
+        // On Windows the strip is the drag area: a click here is ours.
+        .occlude()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(6.0))
+        .h(px(24.0))
+        .px(px(9.0))
+        .border_1()
+        .border_color(theme::accent_border())
+        .rounded_full()
+        .bg(theme::bg_elevated())
+        .cursor_pointer()
+        .on_click(|_, _, cx| crate::update_notice::restart(cx))
+        .child(theme::dot(theme::accent()))
+        .child(mono(
+            format!("{} ready \u{00b7}", ready.version),
+            10.5,
+            600.0,
+            theme::text_muted(),
+        ))
+        .child(mono(verb, 10.5, 600.0, theme::accent_bright()).underline()),
+    )
 }
 
 fn screen_chips(app: &PwrRoute, status: &Status) -> Vec<Div> {
@@ -316,7 +366,7 @@ pub fn title_strip(app: &PwrRoute, status: &Status, window: &Window, cx: &App) -
             theme::text_secondary(),
         ))
         .child(div().flex_1())
-        .children(strip_chips(app, status))
+        .children(strip_chips(app, status, cx))
 }
 
 /// The strip's children, by chrome, for `e2e::regions`: what the callers

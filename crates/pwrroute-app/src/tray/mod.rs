@@ -80,11 +80,13 @@ pub enum TrayCommand {
     MakeDefault,
     /// Sync's row: Settings › Cloud Sync.
     Sync,
+    /// The update banner and its native row: Restart to update.
+    RestartToUpdate,
     Quit,
 }
 
 impl TrayCommand {
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::OpenMain,
         Self::TestLink,
         Self::Rules,
@@ -101,6 +103,7 @@ impl TrayCommand {
         Self::CatchNext,
         Self::MakeDefault,
         Self::Sync,
+        Self::RestartToUpdate,
         Self::Quit,
     ];
 
@@ -124,6 +127,7 @@ impl TrayCommand {
             Self::CatchNext => "pwrroute.catch-next",
             Self::MakeDefault => "pwrroute.make-default",
             Self::Sync => "pwrroute.sync",
+            Self::RestartToUpdate => "pwrroute.restart-to-update",
             Self::Quit => "pwrroute.quit",
         }
     }
@@ -425,6 +429,34 @@ fn fixture(now: SystemTime) -> Option<TrayModel> {
     }
 }
 
+/// The update banner and the native row follow `update_notice::ready`
+/// from now on. `update_notice::install` calls it, once its entity exists.
+pub fn follow_updates(cx: &mut App) {
+    let Some(model) = cx
+        .try_global::<Tray>()
+        .filter(|tray| tray.live)
+        .map(|tray| tray.model.clone())
+    else {
+        return;
+    };
+    let Some(notices) = crate::update_notice::notices(cx) else {
+        return;
+    };
+    refresh_update(&model, cx);
+    cx.observe(&notices, move |_, cx| refresh_update(&model, cx))
+        .detach();
+}
+
+fn refresh_update(model: &Entity<TrayModel>, cx: &mut App) {
+    let ready = crate::update_notice::ready(cx);
+    model.update(cx, |model, cx| {
+        if model.update != ready {
+            model.update = ready;
+            cx.notify();
+        }
+    });
+}
+
 /// Keep the sync row at what the last pass found, and its age current
 /// each time the dropdown opens.
 fn follow_sync(model: &Entity<TrayModel>, cx: &mut App) {
@@ -624,6 +656,7 @@ pub fn run(command: TrayCommand, cx: &mut App) {
         TrayCommand::About => crate::settings::open(cx, Some(crate::settings::Pane::About)),
         TrayCommand::Settings => crate::settings::open(cx, None),
         TrayCommand::Sync => crate::settings::open(cx, Some(crate::settings::Pane::Sync)),
+        TrayCommand::RestartToUpdate => crate::update_notice::restart(cx),
         TrayCommand::Rules => show_screen(Screen::Rules, cx),
         TrayCommand::TestLink => show_screen(Screen::TestLink, cx),
         TrayCommand::Activity => show_screen(Screen::Activity, cx),
