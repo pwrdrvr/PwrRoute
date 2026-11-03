@@ -2566,7 +2566,9 @@ mod tests {
         )
         .unwrap();
         fs::write(&dependency, "export default 'Safari';").unwrap();
-        fs::File::open(&dependency)
+        fs::File::options()
+            .write(true)
+            .open(&dependency)
             .unwrap()
             .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10))
             .unwrap();
@@ -2574,7 +2576,9 @@ mod tests {
         assert_eq!(found.default_browser.as_deref(), Some("Safari"));
         assert!(crate::engine_worker::unchanged(&stamps));
         fs::write(&dependency, "export default 'Firefox';").unwrap();
-        fs::File::open(&dependency)
+        fs::File::options()
+            .write(true)
+            .open(&dependency)
             .unwrap()
             .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20))
             .unwrap();
@@ -2596,7 +2600,9 @@ mod tests {
         )
         .unwrap();
         fs::write(&dependency, "export default 'Safari';").unwrap();
-        fs::File::open(&dependency)
+        fs::File::options()
+            .write(true)
+            .open(&dependency)
             .unwrap()
             .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10))
             .unwrap();
@@ -2635,7 +2641,9 @@ mod tests {
             token
         });
         fs::write(&dependency, "export default 'Firefox';").unwrap();
-        fs::File::open(&dependency)
+        fs::File::options()
+            .write(true)
+            .open(&dependency)
             .unwrap()
             .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20))
             .unwrap();

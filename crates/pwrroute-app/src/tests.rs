@@ -7942,7 +7942,9 @@ fn engine_work_add_rechecks_config_changed_after_warning_before_commit(cx: &mut 
     let dir = scratch("recheck-sheet-config");
     let config = dir.join("config.js");
     std::fs::write(&config, "export default { defaultBrowser: 'Safari', handlers: [{ match: '*', browser: 'Safari' }] }").unwrap();
-    std::fs::File::open(&config)
+    std::fs::File::options()
+        .write(true)
+        .open(&config)
         .unwrap()
         .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10))
         .unwrap();
@@ -7966,7 +7968,9 @@ fn engine_work_add_rechecks_config_changed_after_warning_before_commit(cx: &mut 
     assert!(sheet_problem(&view, cx).is_some());
     let before = view.read_with(cx, |app, _| app.store.written());
     std::fs::write(&config, "export default { defaultBrowser: 'Firefox' }").unwrap();
-    std::fs::File::open(&config)
+    std::fs::File::options()
+        .write(true)
+        .open(&config)
         .unwrap()
         .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20))
         .unwrap();
@@ -8061,7 +8065,9 @@ fn engine_review_cached_menu_baseline_rejects_changed_import(cx: &mut TestAppCon
     .unwrap();
     let write = |text: &str, seconds| {
         std::fs::write(&dependency, text).unwrap();
-        std::fs::File::open(&dependency)
+        std::fs::File::options()
+            .write(true)
+            .open(&dependency)
             .unwrap()
             .set_modified(
                 std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
@@ -8125,7 +8131,9 @@ fn engine_review_link_policy_changed_during_http_is_reloaded(cx: &mut TestAppCon
     .unwrap();
     let write = |body: &str, seconds| {
         std::fs::write(&policy, body).unwrap();
-        std::fs::File::open(&policy)
+        std::fs::File::options()
+            .write(true)
+            .open(&policy)
             .unwrap()
             .set_modified(
                 std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
