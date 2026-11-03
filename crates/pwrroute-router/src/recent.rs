@@ -128,12 +128,24 @@ impl RecentDispatches {
             (other.received_at, other.id) > (record.received_at, record.id)
         };
         if let Some(link) = link {
-            let index = inner.waiting.iter().take_while(|(id, _)| {
-                inner.records.iter().find(|other| other.id == *id).is_some_and(newer)
-            }).count();
+            let index = inner
+                .waiting
+                .iter()
+                .take_while(|(id, _)| {
+                    inner
+                        .records
+                        .iter()
+                        .find(|other| other.id == *id)
+                        .is_some_and(newer)
+                })
+                .count();
             inner.waiting.insert(index, (record.id, link));
         }
-        let index = inner.records.iter().take_while(|other| newer(other)).count();
+        let index = inner
+            .records
+            .iter()
+            .take_while(|other| newer(other))
+            .count();
         inner.records.insert(index, record);
         inner.sweep(SystemTime::now());
     }

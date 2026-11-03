@@ -13,8 +13,7 @@ use std::{
 
 use anyhow::Result;
 use pwrroute_engine::{
-    AppType, Browser, Engine, Link as EngineLink, Network, Opener, ShortLinks, Source,
-    Stage, Trace,
+    AppType, Browser, Engine, Link as EngineLink, Network, Opener, ShortLinks, Source, Stage, Trace,
 };
 
 use crate::{
@@ -627,8 +626,14 @@ enum Command {
         reply: mpsc::Sender<()>,
     },
     Refresh,
-    Expanded { lane: usize, job: pipeline::Expanded },
-    Launched { lane: usize, result: pipeline::Attempt },
+    Expanded {
+        lane: usize,
+        job: pipeline::Expanded,
+    },
+    Launched {
+        lane: usize,
+        result: pipeline::Attempt,
+    },
     Shutdown,
 }
 
@@ -1244,7 +1249,14 @@ impl Worker {
         log::log!(target: "pwrroute::link", level, "{}", record.log_line());
     }
 
-    fn process(&mut self, request: &Queued, mode: &Mode, expanded: &EngineLink, took: pipeline::Reservation, refresh_error: Option<String>) -> DispatchRecord {
+    fn process(
+        &mut self,
+        request: &Queued,
+        mode: &Mode,
+        expanded: &EngineLink,
+        took: pipeline::Reservation,
+        refresh_error: Option<String>,
+    ) -> DispatchRecord {
         let dequeued = Instant::now();
         let mut record = DispatchRecord {
             id: request.id,
@@ -1349,7 +1361,11 @@ impl Worker {
             record.steps.push(Step::Browser {
                 browser: browser.clone(),
             });
-            record.outcome = if *mode == Mode::Test { Outcome::Tested } else { Outcome::Failed };
+            record.outcome = if *mode == Mode::Test {
+                Outcome::Tested
+            } else {
+                Outcome::Failed
+            };
             record.browser = Some(browser);
         }
         record.timings.total_us = Timings::micros(request.received.elapsed());
@@ -1377,7 +1393,13 @@ impl Worker {
     ) -> (Browser, Privacy) {
         let url = expanded.original_url.as_str();
         let resolver = match refresh_error.map_or_else(
-            || self.resolver.as_ref().map(|resolver| resolver.as_ref()).map_err(Clone::clone), Err
+            || {
+                self.resolver
+                    .as_ref()
+                    .map(|resolver| resolver.as_ref())
+                    .map_err(Clone::clone)
+            },
+            Err,
         ) {
             Ok(resolver) => resolver,
             Err(reason) => {
@@ -1387,7 +1409,9 @@ impl Worker {
         };
         let opener = link.opener.as_ref().map(Opener::from);
         if expanded.was_expanded() {
-            steps.push(Step::Expanded { url: expanded.url.clone() });
+            steps.push(Step::Expanded {
+                url: expanded.url.clone(),
+            });
         }
         let url = expanded.url.as_str();
         let mut privacy = Privacy::Full;
@@ -1479,10 +1503,15 @@ impl Worker {
 
 /// One admission/ordered-Catch commit, with an explicit clock so the
 /// expiry boundary can be tested without racing a wall-clock timer.
-fn take_override_from(slot: &mut Option<Override>, keeps_nothing: bool, now: SystemTime) -> Option<Took> {
-    if slot.as_ref().is_some_and(|o| {
-        o.expired(now) || (keeps_nothing && matches!(o, Override::Holding(_)))
-    }) {
+fn take_override_from(
+    slot: &mut Option<Override>,
+    keeps_nothing: bool,
+    now: SystemTime,
+) -> Option<Took> {
+    if slot
+        .as_ref()
+        .is_some_and(|o| o.expired(now) || (keeps_nothing && matches!(o, Override::Holding(_))))
+    {
         *slot = None;
     }
     let (took, used_up) = match slot.as_mut()? {

@@ -19,7 +19,14 @@ pub(super) struct Admission {
 
 impl Default for Admission {
     fn default() -> Self {
-        Self { budget: Mutex::new(Budget { used: 0, closed: false }), send_lock: Mutex::new(()), changed: Condvar::new() }
+        Self {
+            budget: Mutex::new(Budget {
+                used: 0,
+                closed: false,
+            }),
+            send_lock: Mutex::new(()),
+            changed: Condvar::new(),
+        }
     }
 }
 
@@ -27,15 +34,27 @@ impl Admission {
     pub(super) fn acquire(self: &Arc<Self>) -> std::result::Result<Permit, RouterGone> {
         let mut budget = self.budget.lock().unwrap_or_else(PoisonError::into_inner);
         while budget.used == CAPACITY && !budget.closed {
-            budget = self.changed.wait(budget).unwrap_or_else(PoisonError::into_inner);
+            budget = self
+                .changed
+                .wait(budget)
+                .unwrap_or_else(PoisonError::into_inner);
         }
-        if budget.closed { return Err(RouterGone); }
+        if budget.closed {
+            return Err(RouterGone);
+        }
         budget.used += 1;
         Ok(Permit(self.clone()))
     }
 
-    pub(super) fn send(&self, tx: &mpsc::SyncSender<Command>, command: Command) -> std::result::Result<(), RouterGone> {
-        let _send = self.send_lock.lock().unwrap_or_else(PoisonError::into_inner);
+    pub(super) fn send(
+        &self,
+        tx: &mpsc::SyncSender<Command>,
+        command: Command,
+    ) -> std::result::Result<(), RouterGone> {
+        let _send = self
+            .send_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let budget = self.budget.lock().unwrap_or_else(PoisonError::into_inner);
         if budget.closed {
             drop(budget);
@@ -48,7 +67,10 @@ impl Admission {
     }
 
     pub(super) fn close(&self, tx: &mpsc::SyncSender<Command>) {
-        let _send = self.send_lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let _send = self
+            .send_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
         let mut budget = self.budget.lock().unwrap_or_else(PoisonError::into_inner);
         budget.closed = true;
         drop(budget);
@@ -80,10 +102,17 @@ pub(super) enum Reservation {
 }
 
 impl Reservation {
-    pub(super) fn take(self, worker: &Worker, source: crate::link::Source, privacy: Privacy) -> Option<Took> {
+    pub(super) fn take(
+        self,
+        worker: &Worker,
+        source: crate::link::Source,
+        privacy: Privacy,
+    ) -> Option<Took> {
         match self {
             Self::Ready(took) => took,
-            Self::Ordered => worker.take_catch(source, privacy).or_else(|| worker.take_override()),
+            Self::Ordered => worker
+                .take_catch(source, privacy)
+                .or_else(|| worker.take_override()),
         }
     }
 }
@@ -117,10 +146,19 @@ struct CheckedNetwork<'a> {
 }
 
 impl Network for CheckedNetwork<'_> {
-    fn request(&self, method: pwrroute_engine::Method, url: &str, timeout: Duration) -> Result<pwrroute_engine::Reply> {
-        if self.cancelled.load(Ordering::SeqCst) { anyhow::bail!("shortener policy changed"); }
+    fn request(
+        &self,
+        method: pwrroute_engine::Method,
+        url: &str,
+        timeout: Duration,
+    ) -> Result<pwrroute_engine::Reply> {
+        if self.cancelled.load(Ordering::SeqCst) {
+            anyhow::bail!("shortener policy changed");
+        }
         let reply = self.network.request(method, url, timeout)?;
-        if self.cancelled.load(Ordering::SeqCst) { anyhow::bail!("shortener policy changed"); }
+        if self.cancelled.load(Ordering::SeqCst) {
+            anyhow::bail!("shortener policy changed");
+        }
         Ok(reply)
     }
 }
@@ -164,9 +202,15 @@ impl<T: Send + 'static> Lane<T> {
     fn spawn(name: &str, mut run: impl FnMut(T) + Send + 'static) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let thread = thread::Builder::new().name(name.into()).spawn(move || {
-            while let Ok(item) = rx.recv() { run(item); }
+            while let Ok(item) = rx.recv() {
+                run(item);
+            }
         })?;
-        Ok(Self { tx: Some(tx), thread: Some(thread), busy: None })
+        Ok(Self {
+            tx: Some(tx),
+            thread: Some(thread),
+            busy: None,
+        })
     }
 
     fn send(&mut self, item: T, key: String) {
@@ -181,7 +225,9 @@ impl<T: Send + 'static> Lane<T> {
 impl<T> Drop for Lane<T> {
     fn drop(&mut self) {
         self.tx.take();
-        if let Some(thread) = self.thread.take() { let _ = thread.join(); }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 
@@ -198,18 +244,27 @@ pub(super) struct Pipeline {
 }
 
 impl Pipeline {
-    pub(super) fn new(launcher: Box<dyn Launcher>, tx: mpsc::SyncSender<Command>, network: Option<Arc<dyn Network + Send + Sync>>) -> std::io::Result<Self> {
+    pub(super) fn new(
+        launcher: Box<dyn Launcher>,
+        tx: mpsc::SyncSender<Command>,
+        network: Option<Arc<dyn Network + Send + Sync>>,
+    ) -> std::io::Result<Self> {
         let dry_run = launcher.is_dry_run();
         let mut launchers = Vec::new();
         let template = if let Some(fork) = launcher.fork() {
             launchers.push(fork);
             for _ in 1..LANES {
                 // A forkable launcher supplies the same capability each time.
-                let Some(fork) = launcher.fork() else { break; };
+                let Some(fork) = launcher.fork() else {
+                    break;
+                };
                 launchers.push(fork);
             }
             Some(launcher)
-        } else { launchers.push(launcher); None };
+        } else {
+            launchers.push(launcher);
+            None
+        };
         let log_enabled = Arc::new(AtomicBool::new(false));
         let mut launch = Vec::new();
         for (lane, mut launcher) in launchers.into_iter().enumerate() {
@@ -228,7 +283,9 @@ impl Pipeline {
         // One client shared by a fixed number of expansion workers. No
         // request or client construction runs on the resolver thread.
         let client = Arc::new(std::sync::OnceLock::<Arc<dyn Network + Send + Sync>>::new());
-        if let Some(network) = network { let _ = client.set(network); }
+        if let Some(network) = network {
+            let _ = client.set(network);
+        }
         let mut expand = Vec::new();
         for lane in 0..LANES {
             let tx = tx.clone();
@@ -236,22 +293,49 @@ impl Pipeline {
             expand.push(Lane::spawn("pwrroute-expand", move |item: Expand| {
                 let started = Instant::now();
                 let link = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let network = client.get_or_init(|| Arc::new(pwrroute_engine::HttpNetwork::new()));
-                    let checked = CheckedNetwork { network: network.as_ref(), cancelled: &item.cancelled };
+                    let network =
+                        client.get_or_init(|| Arc::new(pwrroute_engine::HttpNetwork::new()));
+                    let checked = CheckedNetwork {
+                        network: network.as_ref(),
+                        cancelled: &item.cancelled,
+                    };
                     let link = item.policy.expand(&item.url, &checked);
-                    if item.cancelled.load(Ordering::SeqCst) { EngineLink::new(&item.url) } else { link }
-                })).unwrap_or_else(|_| EngineLink::new(&item.url));
-                let _ = tx.send(Command::Expanded { lane, job: Expanded {
-                    id: item.id, link, micros: Timings::micros(started.elapsed()).max(1),
-                } });
+                    if item.cancelled.load(Ordering::SeqCst) {
+                        EngineLink::new(&item.url)
+                    } else {
+                        link
+                    }
+                }))
+                .unwrap_or_else(|_| EngineLink::new(&item.url));
+                let _ = tx.send(Command::Expanded {
+                    lane,
+                    job: Expanded {
+                        id: item.id,
+                        link,
+                        micros: Timings::micros(started.elapsed()).max(1),
+                    },
+                });
             })?);
         }
         let active = (0..launch.len()).map(|_| None).collect();
-        Ok(Self { expand, launch, active, template, dry_run, log_enabled, waiting: VecDeque::new(), launching: VecDeque::new(), outstanding: 0 })
+        Ok(Self {
+            expand,
+            launch,
+            active,
+            template,
+            dry_run,
+            log_enabled,
+            waiting: VecDeque::new(),
+            launching: VecDeque::new(),
+            outstanding: 0,
+        })
     }
 
     fn key(&self, browser: &Browser) -> String {
-        self.template.as_ref().map_or_else(|| "serial".into(), |launcher| launcher.ordering_key(browser))
+        self.template.as_ref().map_or_else(
+            || "serial".into(),
+            |launcher| launcher.ordering_key(browser),
+        )
     }
 }
 
@@ -260,19 +344,44 @@ impl Worker {
         self.update_launch_logging();
         let mut stopping = false;
         while !stopping || self.io.outstanding > 0 {
-            let Ok(command) = rx.recv() else { break; };
+            let Ok(command) = rx.recv() else {
+                break;
+            };
             match command {
-                Command::Dispatch { request, reply } => self.accept(request, Mode::Dispatch, Reply::Dispatch(reply)),
-                Command::Test { request, reply } => self.accept(request, Mode::Test, Reply::Test(reply)),
-                Command::Release { from, how, received, received_at, reply, permit } => {
+                Command::Dispatch { request, reply } => {
+                    self.accept(request, Mode::Dispatch, Reply::Dispatch(reply))
+                }
+                Command::Test { request, reply } => {
+                    self.accept(request, Mode::Test, Reply::Test(reply))
+                }
+                Command::Release {
+                    from,
+                    how,
+                    received,
+                    received_at,
+                    reply,
+                    permit,
+                } => {
                     if let Some(link) = self.recent.take_pending(from) {
-                        let request = Queued { _permit: permit, id: DispatchId(self.next_id.fetch_add(1, Ordering::Relaxed)), link, forwarded: false, received, received_at };
+                        let request = Queued {
+                            _permit: permit,
+                            id: DispatchId(self.next_id.fetch_add(1, Ordering::Relaxed)),
+                            link,
+                            forwarded: false,
+                            received,
+                            received_at,
+                        };
                         self.accept(request, Mode::Release { from, how }, Reply::Release(reply));
-                    } else { let _ = reply.send(Err(OpenLaterError::NotPending)); }
+                    } else {
+                        let _ = reply.send(Err(OpenLaterError::NotPending));
+                    }
                 }
                 Command::Replace { factory, reply } => {
                     let result = match build(Some(factory)) {
-                        Ok(resolver) => { self.resolver = Ok(resolver); Ok(()) },
+                        Ok(resolver) => {
+                            self.resolver = Ok(resolver);
+                            Ok(())
+                        }
                         Err(e) => Err(e),
                     };
                     self.refresh_config();
@@ -281,11 +390,17 @@ impl Worker {
                 Command::Status { reply } => {
                     let (_, config_error) = self.refresh_config();
                     let _ = reply.send(RouterStatus {
-                        config_error, dry_run: self.io.dry_run,
-                        journal_error: self.journal.as_ref().and_then(|j| j.error().map(str::to_owned)),
+                        config_error,
+                        dry_run: self.io.dry_run,
+                        journal_error: self
+                            .journal
+                            .as_ref()
+                            .and_then(|j| j.error().map(str::to_owned)),
                     });
                 }
-                Command::Refresh => { self.refresh_config(); }
+                Command::Refresh => {
+                    self.refresh_config();
+                }
                 Command::SetRetention { retention, reply } => {
                     self.recent.set_retention(retention);
                     self.options.retention = retention;
@@ -295,14 +410,25 @@ impl Worker {
                 Command::SetJournal { config, reply } => {
                     self.journal = None;
                     self.journal = config.clone().map(Journal::new);
-                    *self.journal_config.lock().unwrap_or_else(PoisonError::into_inner) = config.clone();
+                    *self
+                        .journal_config
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner) = config.clone();
                     self.options.journal = config;
                     self.update_launch_logging();
                     let _ = reply.send(());
                 }
-                Command::Expanded { lane, job: expanded } => {
+                Command::Expanded {
+                    lane,
+                    job: expanded,
+                } => {
                     self.io.expand[lane].busy = None;
-                    if let Some(job) = self.io.waiting.iter_mut().find(|j| j.request.id == expanded.id) {
+                    if let Some(job) = self
+                        .io
+                        .waiting
+                        .iter_mut()
+                        .find(|j| j.request.id == expanded.id)
+                    {
                         job.expanded = Some(expanded.link);
                         job.expand_us = expanded.micros;
                         job.expanding = false;
@@ -320,7 +446,10 @@ impl Worker {
 
     fn refresh_config(&mut self) -> (Option<ShortLinks>, Option<String>) {
         let refreshed = self.in_charge();
-        let policy = refreshed.as_ref().ok().and_then(|resolver| resolver.short_links());
+        let policy = refreshed
+            .as_ref()
+            .ok()
+            .and_then(|resolver| resolver.short_links());
         let error = refreshed.err();
         for job in &self.io.waiting {
             if job.expanding && job.policy != policy {
@@ -331,19 +460,36 @@ impl Worker {
     }
 
     fn update_launch_logging(&self) {
-        self.io.log_enabled.store(self.options.diagnostic_log.is_some() && keeps_links(self.recent.retention(), self.options.journal.as_ref()), Ordering::Relaxed);
+        self.io.log_enabled.store(
+            self.options.diagnostic_log.is_some()
+                && keeps_links(self.recent.retention(), self.options.journal.as_ref()),
+            Ordering::Relaxed,
+        );
     }
 
     fn accept(&mut self, request: Queued, mode: Mode, reply: Reply) {
         let started = Instant::now();
         let url = normalize_url(&request.link.url).ok();
-        let policy = if url.is_some() { self.refresh_config().0 } else { None };
-        let state_waits = self.io.waiting.iter().any(|job| matches!(job.reservation, Reservation::Ordered));
+        let policy = if url.is_some() {
+            self.refresh_config().0
+        } else {
+            None
+        };
+        let state_waits = self
+            .io
+            .waiting
+            .iter()
+            .any(|job| matches!(job.reservation, Reservation::Ordered));
         let reservation = if mode != Mode::Dispatch || url.is_none() {
             Reservation::Ready(None)
-        } else if state_waits || (self.catch.load(Ordering::SeqCst) && request.link.source != crate::link::Source::Api) {
+        } else if state_waits
+            || (self.catch.load(Ordering::SeqCst)
+                && request.link.source != crate::link::Source::Api)
+        {
             Reservation::Ordered
-        } else { Reservation::Ready(self.take_override()) };
+        } else {
+            Reservation::Ready(self.take_override())
+        };
         // None means expansion still needs scheduling. Invalid URLs never
         // make a network request or consume a counter.
         let expanded = match (&url, &policy) {
@@ -351,7 +497,18 @@ impl Worker {
             _ => Some(EngineLink::new(url.as_deref().unwrap_or(&request.link.url))),
         };
         self.io.outstanding += 1;
-        self.io.waiting.push_back(Job { request, mode, reply, reservation, policy, expanded, expand_us: 0, started, expanding: false, cancelled: Arc::new(AtomicBool::new(false)) });
+        self.io.waiting.push_back(Job {
+            request,
+            mode,
+            reply,
+            reservation,
+            policy,
+            expanded,
+            expand_us: 0,
+            started,
+            expanding: false,
+            cancelled: Arc::new(AtomicBool::new(false)),
+        });
     }
 
     fn pump(&mut self) {
@@ -359,17 +516,33 @@ impl Worker {
         // a worker's input queue. The admission permit bounds all stages,
         // including completed expansions waiting behind Catch.
         loop {
-            let Some(lane) = self.io.expand.iter().position(|lane| lane.busy.is_none()) else { break; };
-            let Some(index) = self.io.waiting.iter().position(|job| job.expanded.is_none() && !job.expanding) else { break; };
+            let Some(lane) = self.io.expand.iter().position(|lane| lane.busy.is_none()) else {
+                break;
+            };
+            let Some(index) = self
+                .io
+                .waiting
+                .iter()
+                .position(|job| job.expanded.is_none() && !job.expanding)
+            else {
+                break;
+            };
             let policy = self.refresh_config().0;
             let job = &mut self.io.waiting[index];
             let url = normalize_url(&job.request.link.url).expect("expansion has a valid URL");
             job.policy = policy;
             if let Some(policy) = job.policy.as_ref().filter(|policy| policy.is_short(&url)) {
-                let item = Expand { id: job.request.id, url, policy: policy.clone(), cancelled: job.cancelled.clone() };
+                let item = Expand {
+                    id: job.request.id,
+                    url,
+                    policy: policy.clone(),
+                    cancelled: job.cancelled.clone(),
+                };
                 job.expanding = true;
                 self.io.expand[lane].send(item, String::new());
-            } else { job.expanded = Some(EngineLink::new(url)); }
+            } else {
+                job.expanded = Some(EngineLink::new(url));
+            }
         }
         loop {
             let mut ordered_seen = false;
@@ -379,7 +552,9 @@ impl Worker {
                 ordered_seen |= ordered;
                 job.expanded.is_some() && !blocked
             });
-            let Some(index) = ready else { break; };
+            let Some(index) = ready else {
+                break;
+            };
             let mut job = self.io.waiting.remove(index).unwrap();
             let (policy, refresh_error) = self.refresh_config();
             let expanded = if policy == job.policy && !job.cancelled.load(Ordering::SeqCst) {
@@ -387,10 +562,19 @@ impl Worker {
             } else {
                 // Routing uses the current, refreshed config. Never combine
                 // a stale shortener policy's redirect with its replacement.
-                EngineLink::new(normalize_url(&job.request.link.url).unwrap_or_else(|_| job.request.link.url.clone()))
+                EngineLink::new(
+                    normalize_url(&job.request.link.url)
+                        .unwrap_or_else(|_| job.request.link.url.clone()),
+                )
             };
             let reservation = std::mem::replace(&mut job.reservation, Reservation::Ready(None));
-            let mut record = self.process(&job.request, &job.mode, &expanded, reservation, refresh_error);
+            let mut record = self.process(
+                &job.request,
+                &job.mode,
+                &expanded,
+                reservation,
+                refresh_error,
+            );
             record.timings.queue_us = Timings::micros(job.started - job.request.received);
             record.timings.expand_us = job.expand_us;
             if job.mode == Mode::Test || record.browser.is_none() {
@@ -404,34 +588,73 @@ impl Worker {
         // occupy a worker needed by a different browser. Fallback attempts
         // reenter this same scheduler rather than bypassing browser order.
         for lane in 0..self.io.launch.len() {
-            if self.io.launch[lane].busy.is_some() { continue; }
+            if self.io.launch[lane].busy.is_some() {
+                continue;
+            }
             let ready = self.io.launching.iter().position(|item| {
                 let key = self.io.key(&item.browser);
-                !self.io.launch.iter().any(|lane| lane.busy.as_ref() == Some(&key))
+                !self
+                    .io
+                    .launch
+                    .iter()
+                    .any(|lane| lane.busy.as_ref() == Some(&key))
             });
             if let Some(index) = ready {
                 let item = self.io.launching.remove(index).unwrap();
                 let key = self.io.key(&item.browser);
-                let work = LaunchWork { id: item.record.id, browser: item.browser.clone(), attempt: item.attempt, diagnostic: item.diagnostic };
+                let work = LaunchWork {
+                    id: item.record.id,
+                    browser: item.browser.clone(),
+                    attempt: item.attempt,
+                    diagnostic: item.diagnostic,
+                };
                 self.io.active[lane] = Some(item);
                 self.io.launch[lane].send(work, key);
             }
         }
     }
 
-    fn enqueue_launch(&mut self, job: Job, record: DispatchRecord, browser: Browser, attempt: u8, started: Instant) {
-        let diagnostic = self.options.diagnostic_log.is_some() && keeps_links(self.recent.retention(), self.options.journal.as_ref());
-        self.io.launching.push_back(Launch { job, record, browser, attempt, diagnostic, started });
+    fn enqueue_launch(
+        &mut self,
+        job: Job,
+        record: DispatchRecord,
+        browser: Browser,
+        attempt: u8,
+        started: Instant,
+    ) {
+        let diagnostic = self.options.diagnostic_log.is_some()
+            && keeps_links(self.recent.retention(), self.options.journal.as_ref());
+        self.io.launching.push_back(Launch {
+            job,
+            record,
+            browser,
+            attempt,
+            diagnostic,
+            started,
+        });
     }
 
     fn launched(&mut self, lane: usize, result: Attempt) {
         let Attempt { result, dry_run } = result;
-        let launch = self.io.active[lane].take().expect("launch completion owns a lane");
-        let Launch { job, mut record, browser, attempt, started, .. } = launch;
+        let launch = self.io.active[lane]
+            .take()
+            .expect("launch completion owns a lane");
+        let Launch {
+            job,
+            mut record,
+            browser,
+            attempt,
+            started,
+            ..
+        } = launch;
         match result {
             Ok(()) => {
                 record.steps.push(Step::Launched { dry_run });
-                record.outcome = if dry_run { Outcome::DryRun } else { Outcome::Opened };
+                record.outcome = if dry_run {
+                    Outcome::DryRun
+                } else {
+                    Outcome::Opened
+                };
                 record.browser = Some(browser);
             }
             Err(message) => {
@@ -440,7 +663,9 @@ impl Worker {
                     let mut fallback = self.fallback(&browser.url);
                     if !same_app(&browser, &fallback) && !is_self(&fallback) {
                         fallback.private = browser.private;
-                        record.steps.push(Step::Fallback { reason: format!("{} could not be opened", browser.name) });
+                        record.steps.push(Step::Fallback {
+                            reason: format!("{} could not be opened", browser.name),
+                        });
                         self.enqueue_launch(job, record, fallback, 2, started);
                         return;
                     }
@@ -454,12 +679,20 @@ impl Worker {
 
     fn finish(&mut self, job: Job, mut record: DispatchRecord) {
         record.timings.total_us = Timings::micros(job.request.received.elapsed());
-        if job.mode != Mode::Test { record = self.record(record); }
+        if job.mode != Mode::Test {
+            record = self.record(record);
+        }
         match job.reply {
-            Reply::Dispatch(Some(reply)) => { let _ = reply.send(record); }
+            Reply::Dispatch(Some(reply)) => {
+                let _ = reply.send(record);
+            }
             Reply::Dispatch(None) => {}
-            Reply::Test(reply) => { let _ = reply.send(record); }
-            Reply::Release(reply) => { let _ = reply.send(Ok(record)); }
+            Reply::Test(reply) => {
+                let _ = reply.send(record);
+            }
+            Reply::Release(reply) => {
+                let _ = reply.send(Ok(record));
+            }
         }
         self.io.outstanding -= 1;
         // Dropping the request releases capacity only after record delivery.
