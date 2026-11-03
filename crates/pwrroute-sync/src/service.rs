@@ -3,8 +3,31 @@
 //! The app owns one [`Service`]. Every call sends a command to the thread
 //! and returns at once; the thread ticks every [`Schedule::tick`], runs a
 //! pass when the schedule says so, and hands each new [`Status`] to the
-//! callback it was given. Reads of cloud folders, which can block while a
-//! client downloads a file, happen only on this thread.
+//! callback it was given. Bounded, isolated workers own cloud I/O; the
+//! coordinator alone applies local changes and owns sync state.
+//!
+//! Ready targets advance in configured order; busy targets are skipped. Each
+//! target keeps item order (config before rules), and every local decision reads
+//! the current bytes and base under the shared writer guard. A pull schedules
+//! another pass so targets already visited receive the new content too.
+//!
+//! Four process-wide permits cover running I/O and unconsumed results. Each
+//! written root has at most one permit, including after removal or Service
+//! restart. A stuck filesystem syscall retains its permit until it returns:
+//! deadlines never manufacture replacement capacity. If all four are stuck,
+//! new remote work waits while commands and Stop remain responsive.
+//!
+//! Drop retires requests and joins only the coordinator. Detached workers own
+//! remote paths and immutable bytes, never local files, state or app callbacks.
+//! Late results are discarded by request identity. Cancellation is checked
+//! before each controllable remote write stage; an OS write/rename already
+//! entered can still finish after removal/Stop, and may leave a staging file or
+//! content without its manifest. A subsequent reader must settle it normally.
+//!
+//! Local filesystem operations and item checks remain serialized here. A local
+//! disk stall, including a local Finicky symlink into a cloud mount, or a
+//! blocking status callback is outside remote-target isolation. The synchronous
+//! Syncer pass/resolve APIs remain blocking helpers; the app uses Service.
 
 use std::{
     path::PathBuf,
@@ -19,7 +42,9 @@ use std::{
 use anyhow::Result;
 
 use crate::{
-    schedule::{Schedule, Why},
+    folder::Manifest,
+    remote::{Cancel, Observation, Write},
+    schedule::Schedule,
     syncer::{Choice, Item, Status, Syncer, Target},
 };
 
@@ -57,12 +82,14 @@ enum Command {
         done: Box<dyn FnOnce(Result<()>) + Send>,
     },
     Stop,
+    Completed(Box<Completion>),
 }
 
 pub struct Service {
     tx: Sender<Command>,
     status: Arc<Mutex<Status>>,
     thread: Option<JoinHandle<()>>,
+    stop: Cancel,
 }
 
 impl std::fmt::Debug for Service {
@@ -72,75 +99,78 @@ impl std::fmt::Debug for Service {
 }
 
 impl Service {
-    /// Starts the thread. `on_status` runs on it after every pass and every
-    /// resolution.
+    /// Starts the coordinator. `on_status` runs on it when a pass starts,
+    /// after each file completes and after target removal. It must not block.
     pub fn spawn(
-        mut syncer: Syncer,
+        syncer: Syncer,
         clock: impl Clock,
         on_status: impl Fn(&Status) + Send + 'static,
+    ) -> Result<Self> {
+        Self::spawn_with(syncer, clock, on_status, worker::shared())
+    }
+
+    fn spawn_with(
+        syncer: Syncer,
+        clock: impl Clock,
+        on_status: impl Fn(&Status) + Send + 'static,
+        admission: Arc<Mutex<worker::Admission>>,
     ) -> Result<Self> {
         let (tx, rx) = mpsc::channel::<Command>();
         let status = Arc::new(Mutex::new(syncer.status().clone()));
         let shared = Arc::clone(&status);
+        let stop = Cancel::default();
+        let runner_stop = stop.clone();
+        let runner_tx = tx.clone();
         let thread = thread::Builder::new()
             .name("pwrroute-sync".into())
             .spawn(move || {
-                let mut schedule = Schedule::new(EVERY.as_millis() as u64, TICK.as_millis() as u64);
                 let publish = |syncer: &Syncer| {
                     if let Ok(mut s) = shared.lock() {
                         *s = syncer.status().clone();
                     }
                     on_status(syncer.status());
                 };
+                let mut coordinator = Coordinator::new(syncer, runner_stop, admission, runner_tx);
                 loop {
-                    match rx.recv_timeout(TICK) {
-                        Ok(Command::Stop) | Err(RecvTimeoutError::Disconnected) => break,
-                        Ok(Command::Wake) => schedule.wake(),
-                        Ok(Command::Targets(targets)) => {
-                            // A removed folder leaves the status now, even
-                            // when no folder is left to run a pass over.
-                            if syncer.set_targets(targets) {
-                                publish(&syncer);
+                    let message = rx.recv_timeout(Duration::from_millis(25));
+                    if coordinator.stop.check().is_err() {
+                        break;
+                    }
+                    match message {
+                        Ok(command) => {
+                            if !coordinator.command(command, clock.now(), &publish) {
+                                break;
                             }
-                            schedule.wake();
                         }
-                        Ok(Command::Items(items)) => {
-                            syncer.set_items(items);
-                            schedule.wake();
-                        }
-                        Ok(Command::MachineName(name)) => syncer.set_machine_name(&name),
-                        Ok(Command::Resolve {
-                            root,
-                            name,
-                            remote_sha,
-                            choice,
-                            done,
-                        }) => {
-                            let result =
-                                syncer.resolve(&root, &name, &remote_sha, choice, clock.now());
-                            done(result);
-                            schedule.wake();
-                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
                         Err(RecvTimeoutError::Timeout) => {}
                     }
-                    if syncer.targets().is_empty() {
-                        continue;
-                    }
-                    let now = clock.now();
-                    if let Some(why) = schedule.tick(now, syncer.local_stamps()) {
-                        if why != Why::Interval {
-                            log::debug!("sync: pass ({why:?})");
+                    // Drain a bounded batch before applying ready observations, in
+                    // configured target order. Commands still get serviced during
+                    // a burst of worker completions.
+                    let mut stopped = false;
+                    for _ in 0..63 {
+                        let Ok(command) = rx.try_recv() else {
+                            break;
+                        };
+                        if !coordinator.command(command, clock.now(), &publish) {
+                            stopped = true;
+                            break;
                         }
-                        syncer.pass(now);
-                        schedule.passed_with(syncer.local_stamps());
-                        publish(&syncer);
                     }
+                    if stopped {
+                        break;
+                    }
+                    coordinator.tick(clock.now(), &publish);
+                    coordinator.drive(clock.now(), &publish);
                 }
+                coordinator.shutdown();
             })?;
         Ok(Self {
             tx,
             status,
             thread: Some(thread),
+            stop,
         })
     }
 
@@ -162,7 +192,8 @@ impl Service {
         let _ = self.tx.send(Command::MachineName(name.to_owned()));
     }
 
-    /// Settles a conflict on the sync thread; `done` gets the outcome there.
+    /// Settles a conflict using a fresh remote observation; `done` runs on
+    /// the coordinator. A folder already syncing returns a busy error at once.
     pub fn resolve(
         &self,
         root: PathBuf,
@@ -188,9 +219,17 @@ impl Service {
 
 impl Drop for Service {
     fn drop(&mut self) {
+        self.stop.cancel();
         let _ = self.tx.send(Command::Stop);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
     }
 }
+
+mod coordinator;
+mod worker;
+use coordinator::{Completion, Coordinator, Outcome};
+
+#[cfg(test)]
+mod tests;

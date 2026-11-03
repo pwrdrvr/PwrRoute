@@ -645,7 +645,16 @@ fn the_service_runs_a_pass_on_its_thread_and_publishes() {
     })
     .unwrap();
     service.set_targets(vec![target(cloud.path())]);
-    let status = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let status = loop {
+        let status = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        if status
+            .targets
+            .first()
+            .is_some_and(|t| t.files.iter().any(|f| f.health.in_step()))
+        {
+            break status;
+        }
+    };
     assert_eq!(status.targets[0].files[0].health, Health::Pushed);
     assert_eq!(service.status(), status);
     assert_eq!(remote(cloud.path()), fs::read(&rules_path).unwrap());
@@ -653,7 +662,16 @@ fn the_service_runs_a_pass_on_its_thread_and_publishes() {
     // Sync now runs another pass, at the clock's time.
     clock.0.store(2_000, Ordering::SeqCst);
     service.wake();
-    let status = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let status = loop {
+        let status = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        if status
+            .targets
+            .first()
+            .is_some_and(|t| t.files.iter().any(|f| f.health.in_step()))
+        {
+            break status;
+        }
+    };
     assert_eq!(status.last_pass, Some(2_000));
     assert_eq!(status.targets[0].files[0].health, Health::InSync);
 
