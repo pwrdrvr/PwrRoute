@@ -299,13 +299,11 @@ fn follow(cx: &mut App) {
         return;
     };
     let state = updater::state();
-    // A download reports every percent: while one runs and nothing new is
-    // held, the ready release is the one already read (`updater::ready`
-    // reads the install's manifest).
-    let unchanged = {
-        let notices = entity.read(cx);
-        state.download.is_some() && state.held == notices.seen.held
-    };
+    // A download reports every percent. When nothing but the download in
+    // flight changed (`updater::settings_changed`, the rule Settings ›
+    // Updates follows), the ready release is the one already read:
+    // `updater::ready` reads the install's manifest.
+    let unchanged = !updater::settings_changed(&entity.read(cx).seen, &state);
     let ready = if unchanged {
         entity.read(cx).ready.clone()
     } else {
