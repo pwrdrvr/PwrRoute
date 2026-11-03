@@ -190,7 +190,8 @@ pub fn is_loading(cx: &App) -> bool {
 }
 
 /// Register once per consumer, during installation. Called on GPUI after each
-/// completed scan, including the initial one; never from the scanning thread.
+/// completed scan, including failures (see `error`) and the initial one;
+/// never from the scanning thread.
 pub fn on_complete(cx: &mut App, callback: ScanCallback) {
     if !cx.has_global::<ScanGlobal>() {
         install(environment(), cx);
@@ -238,14 +239,7 @@ fn start(cx: &mut App, force: bool) {
                         Err(error) => scan.error = Some(error),
                     }
                 }
-                (
-                    again,
-                    if scan.error.is_none() {
-                        scan.callbacks.clone()
-                    } else {
-                        Vec::new()
-                    },
-                )
+                (again, scan.callbacks.clone())
             });
             if again {
                 start(cx, true);
