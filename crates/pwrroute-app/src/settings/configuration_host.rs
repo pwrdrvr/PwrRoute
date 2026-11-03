@@ -123,8 +123,15 @@ pub fn load(cx: &mut App) {
     );
 }
 
-pub(super) fn apply_configuration(model: &mut super::model::SettingsModel, configuration: Configuration) {
-    let problem = model.configuration.everything_else.as_ref().and_then(|field| field.problem.clone());
+pub(super) fn apply_configuration(
+    model: &mut super::model::SettingsModel,
+    configuration: Configuration,
+) {
+    let problem = model
+        .configuration
+        .everything_else
+        .as_ref()
+        .and_then(|field| field.problem.clone());
     model.configuration = configuration;
     if let (Some(field), Some(problem)) = (model.configuration.everything_else.as_mut(), problem) {
         field.problem = Some(problem);

@@ -1143,26 +1143,47 @@ mod target_tests {
     use super::*;
 
     #[gpui_kit::test]
-    fn review_a_completed_scan_refreshes_the_existing_tray_model(cx: &mut gpui_kit::TestAppContext) {
+    fn review_a_completed_scan_refreshes_the_existing_tray_model(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         let (release, wait) = async_channel::bounded(1);
         let model = cx.update(|cx| {
-            crate::browser_scan::install(pwrroute_browsers::Env::fixture(
-                pwrroute_browsers::Platform::current(), std::env::temp_dir()), cx);
-            crate::browser_scan::set_test_producer(cx, std::sync::Arc::new(move || {
-                let wait = wait.clone();
-                Box::pin(async move {
-                    wait.recv().await.unwrap();
-                    Ok(vec![crate::browser_scan::DetectedApp {
-                        name: "Fixture Browser".into(), bundle_id: None,
-                        location: "/fixture/browser".into(), profiles: vec!["Work".into()],
-                        directories: vec!["Profile 1".into()], profiles_blocked: false,
-                    }])
-                })
-            }));
+            crate::browser_scan::install(
+                pwrroute_browsers::Env::fixture(
+                    pwrroute_browsers::Platform::current(),
+                    std::env::temp_dir(),
+                ),
+                cx,
+            );
+            crate::browser_scan::set_test_producer(
+                cx,
+                std::sync::Arc::new(move || {
+                    let wait = wait.clone();
+                    Box::pin(async move {
+                        wait.recv().await.unwrap();
+                        Ok(vec![crate::browser_scan::DetectedApp {
+                            name: "Fixture Browser".into(),
+                            bundle_id: None,
+                            location: "/fixture/browser".into(),
+                            profiles: vec!["Work".into()],
+                            directories: vec!["Profile 1".into()],
+                            profiles_blocked: false,
+                        }])
+                    })
+                }),
+            );
             let model = cx.new(|_| TrayModel::starting(label("Fixture Browser", "")));
-            cx.set_global(Tray { model: model.clone(), live: true, router: None,
-                config_default: ConfigDefault::default(), native: None, dropdown: None,
-                dropdown_closed_at: None, clock: None, seen: None });
+            cx.set_global(Tray {
+                model: model.clone(),
+                live: true,
+                router: None,
+                config_default: ConfigDefault::default(),
+                native: None,
+                dropdown: None,
+                dropdown_closed_at: None,
+                clock: None,
+                seen: None,
+            });
             refresh_destinations(&model, cx);
             assert!(!model.read(cx).choices.scanned);
             model
@@ -1172,7 +1193,10 @@ mod target_tests {
         cx.run_until_parked();
         cx.update(|cx| {
             let choices = &model.read(cx).choices;
-            assert!(choices.scanned, "completion must update the existing tray, without reopening it");
+            assert!(
+                choices.scanned,
+                "completion must update the existing tray, without reopening it"
+            );
             assert_eq!(choices.browsers[0].profiles, ["Work"]);
         });
     }

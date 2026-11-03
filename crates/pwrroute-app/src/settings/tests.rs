@@ -27,28 +27,57 @@ fn review_a_queued_reopened_pane_keeps_invalidation(cx: &mut TestAppContext) {
     cx.update(|cx| super::open(cx, Some(Pane::Privacy)));
     let old = settings_windows(cx)[0];
     let (release, wait) = async_channel::bounded(1);
-    cx.update(|cx| super::load_async(cx, Pane::Privacy, async move {
-        wait.recv().await.unwrap();
-        Ok(991)
-    }, |model, count| model.privacy.keep_count = count));
+    cx.update(|cx| {
+        super::load_async(
+            cx,
+            Pane::Privacy,
+            async move {
+                wait.recv().await.unwrap();
+                Ok(991)
+            },
+            |model, count| model.privacy.keep_count = count,
+        )
+    });
     cx.run_until_parked();
-    old.update(cx, |_, window, _| window.remove_window()).unwrap();
+    old.update(cx, |_, window, _| window.remove_window())
+        .unwrap();
     cx.update(|cx| {
         super::open(cx, Some(Pane::Privacy));
-        super::load(cx, Pane::Privacy, || 992, |model, count| model.privacy.keep_count = count);
+        super::load(
+            cx,
+            Pane::Privacy,
+            || 992,
+            |model, count| model.privacy.keep_count = count,
+        );
         super::open(cx, Some(Pane::About));
         super::reload_now(cx, Pane::Privacy);
     });
     let reopened = settings_windows(cx)[0];
     release.try_send(()).unwrap();
     cx.run_until_parked();
-    reopened.update(cx, |view, _, _| {
-        assert_ne!(view.model.privacy.keep_count, 992, "queued capture was invalidated before it started");
-        assert!(view.model.pending.contains(&Pane::Privacy));
-    }).unwrap();
-    cx.update(|cx| super::load(cx, Pane::Privacy, || 993, |model, count| model.privacy.keep_count = count));
+    reopened
+        .update(cx, |view, _, _| {
+            assert_ne!(
+                view.model.privacy.keep_count, 992,
+                "queued capture was invalidated before it started"
+            );
+            assert!(view.model.pending.contains(&Pane::Privacy));
+        })
+        .unwrap();
+    cx.update(|cx| {
+        super::load(
+            cx,
+            Pane::Privacy,
+            || 993,
+            |model, count| model.privacy.keep_count = count,
+        )
+    });
     cx.run_until_parked();
-    reopened.update(cx, |view, _, _| assert_eq!(view.model.privacy.keep_count, 993)).unwrap();
+    reopened
+        .update(cx, |view, _, _| {
+            assert_eq!(view.model.privacy.keep_count, 993)
+        })
+        .unwrap();
 }
 
 #[gpui_kit::test]
@@ -57,16 +86,26 @@ fn review_seeded_short_links_still_request_a_fresh_snapshot(cx: &mut TestAppCont
         model.pending.insert(Pane::ShortLinks);
     });
     view.update(cx, |view, cx| {
-        super::configuration_host::apply_configuration(&mut view.model, fixtures::model().configuration);
+        super::configuration_host::apply_configuration(
+            &mut view.model,
+            fixtures::model().configuration,
+        );
         view.pane = Pane::About;
         cx.notify();
     });
     cx.cx.update(|cx| super::reload_now(cx, Pane::ShortLinks));
-    view.update(cx, |view, cx| { view.pane = Pane::ShortLinks; cx.notify(); });
+    view.update(cx, |view, cx| {
+        view.pane = Pane::ShortLinks;
+        cx.notify();
+    });
     draw(cx);
     cx.run_until_parked();
-    assert!(requests.borrow().contains(&SettingsRequest::LoadPane(Pane::ShortLinks)),
-        "first visit after invalidation must request current domains");
+    assert!(
+        requests
+            .borrow()
+            .contains(&SettingsRequest::LoadPane(Pane::ShortLinks)),
+        "first visit after invalidation must request current domains"
+    );
 }
 
 #[gpui_kit::test]
@@ -79,15 +118,39 @@ fn review_a_successful_sync_action_clears_its_previous_error(cx: &mut TestAppCon
     cx.update(|cx| super::open(cx, Some(Pane::Sync)));
     let handle = settings_windows(cx)[0];
     std::fs::create_dir(dir.path().join("settings.json.saving")).unwrap();
-    cx.update(|cx| assert!(super::sync_host::handle_request(&SettingsRequest::SetSyncConfig(false), cx)));
+    cx.update(|cx| {
+        assert!(super::sync_host::handle_request(
+            &SettingsRequest::SetSyncConfig(false),
+            cx
+        ))
+    });
     cx.run_until_parked();
-    handle.update(cx, |view, _, _| assert!(view.model.sync.problem.is_some())).unwrap();
+    handle
+        .update(cx, |view, _, _| assert!(view.model.sync.problem.is_some()))
+        .unwrap();
     std::fs::remove_dir(dir.path().join("settings.json.saving")).unwrap();
-    cx.update(|cx| assert!(super::sync_host::handle_request(&SettingsRequest::SetSyncConfig(false), cx)));
+    cx.update(|cx| {
+        assert!(super::sync_host::handle_request(
+            &SettingsRequest::SetSyncConfig(false),
+            cx
+        ))
+    });
     cx.run_until_parked();
-    handle.update(cx, |view, _, _| assert!(view.model.sync.problem.is_none(),
-        "a successful retry must remove the previous Not changed error")).unwrap();
-    assert_eq!(crate::settings_store::Settings::load(dir.path()).unwrap().sync.config, Some(false));
+    handle
+        .update(cx, |view, _, _| {
+            assert!(
+                view.model.sync.problem.is_none(),
+                "a successful retry must remove the previous Not changed error"
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        crate::settings_store::Settings::load(dir.path())
+            .unwrap()
+            .sync
+            .config,
+        Some(false)
+    );
 }
 
 #[gpui_kit::test]

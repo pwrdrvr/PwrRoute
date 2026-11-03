@@ -877,7 +877,9 @@ fn report_copy(result: anyhow::Result<()>, cx: &mut App) {
         Ok(()) => refresh(cx),
         Err(error) if error.is::<CopiedNotSaved>() => {
             let problem = error.to_string();
-            let pending = cx.try_global::<CopiedConfig>().is_some_and(|copy| copy.0.is_some());
+            let pending = cx
+                .try_global::<CopiedConfig>()
+                .is_some_and(|copy| copy.0.is_some());
             cx.set_global(CopyProblem(pending.then(|| problem.clone())));
             report(problem, cx);
         }
@@ -905,8 +907,12 @@ fn report(problem: String, cx: &mut App) {
 
 fn action_succeeded(cx: &mut App) {
     cx.defer(|cx| {
-        let copy_problem = cx.try_global::<CopyProblem>().and_then(|problem| problem.0.clone());
-        super::update(cx, |model| model.sync.problem = copy_problem.map(Into::into));
+        let copy_problem = cx
+            .try_global::<CopyProblem>()
+            .and_then(|problem| problem.0.clone());
+        super::update(cx, |model| {
+            model.sync.problem = copy_problem.map(Into::into)
+        });
     });
     refresh(cx);
 }
@@ -1123,11 +1129,14 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[gpui_kit::test]
-    fn review_an_unrelated_success_keeps_the_copied_config_error(cx: &mut gpui_kit::TestAppContext) {
+    fn review_an_unrelated_success_keeps_the_copied_config_error(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         cx.update(|cx| {
             crate::assets::load_fonts(cx);
-            let mut store = crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+            let mut store =
+                crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
             store.update(|_| {}).unwrap();
             crate::settings_store::install(store, None, cx);
             super::super::install(cx);
@@ -1136,19 +1145,38 @@ mod tests {
                 on_request: std::rc::Rc::new(|_, _, _| {}),
             });
             super::super::open(cx, Some(super::super::Pane::Sync));
-            cx.set_global(CopiedConfig(Some(Default::default()), SourceSnapshot::capture(cx)));
-            report_copy(Err(CopiedNotSaved("Config copied, source choice not saved: fixture".into()).into()), cx);
+            cx.set_global(CopiedConfig(
+                Some(Default::default()),
+                SourceSnapshot::capture(cx),
+            ));
+            report_copy(
+                Err(
+                    CopiedNotSaved("Config copied, source choice not saved: fixture".into()).into(),
+                ),
+                cx,
+            );
         });
         cx.run_until_parked();
-        cx.update(|cx| { handle_request(&SettingsRequest::SetSyncConfig(true), cx); });
+        cx.update(|cx| {
+            handle_request(&SettingsRequest::SetSyncConfig(true), cx);
+        });
         cx.run_until_parked();
         cx.update(|cx| {
             for window in cx.windows() {
                 if let Some(window) = window.downcast::<super::super::SettingsWindow>() {
-                    window.update(cx, |view, _, cx| {
-                        apply_sync(&mut view.model, Sync::default(), cx);
-                        assert!(view.model.sync.problem.as_ref().unwrap().starts_with("Config copied,"));
-                    }).unwrap();
+                    window
+                        .update(cx, |view, _, cx| {
+                            apply_sync(&mut view.model, Sync::default(), cx);
+                            assert!(
+                                view.model
+                                    .sync
+                                    .problem
+                                    .as_ref()
+                                    .unwrap()
+                                    .starts_with("Config copied,")
+                            );
+                        })
+                        .unwrap();
                 }
             }
         });

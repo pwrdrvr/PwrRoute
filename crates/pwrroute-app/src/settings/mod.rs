@@ -348,7 +348,9 @@ fn reload_now(cx: &mut App, pane: Pane) {
     if let Some(handle) = open {
         let _ = handle.update(cx, |view, _, cx| {
             if let Some(load) = view.loads.get_mut(&pane) {
-                match load { PaneLoad::Running(dirty) | PaneLoad::Queued(dirty) => *dirty = true }
+                match load {
+                    PaneLoad::Running(dirty) | PaneLoad::Queued(dirty) => *dirty = true,
+                }
             } else if view.requested.remove(&pane) || view.pane == pane {
                 view.model.pending.insert(pane);
                 view.model.problems.remove(&pane);
@@ -436,11 +438,18 @@ fn load_future<T: Send + 'static>(
     let Some(handle) = cx.try_global::<OpenWindow>().and_then(|open| open.0) else {
         return;
     };
-    let Ok(start) = handle.update(cx, |view, _, _| {
-        match view.loads.get_mut(&pane) {
-            Some(PaneLoad::Running(dirty)) => { *dirty = true; false }
-            Some(PaneLoad::Queued(dirty)) => { *dirty = false; true }
-            None => { view.loads.insert(pane, PaneLoad::Running(false)); true }
+    let Ok(start) = handle.update(cx, |view, _, _| match view.loads.get_mut(&pane) {
+        Some(PaneLoad::Running(dirty)) => {
+            *dirty = true;
+            false
+        }
+        Some(PaneLoad::Queued(dirty)) => {
+            *dirty = false;
+            true
+        }
+        None => {
+            view.loads.insert(pane, PaneLoad::Running(false));
+            true
         }
     }) else {
         return;
@@ -460,17 +469,22 @@ fn load_future<T: Send + 'static>(
                 pane,
                 Some(Box::new(move |cx| {
                     if cx.try_global::<OpenWindow>().and_then(|open| open.0) == Some(handle) {
-                        let ready = handle.update(cx, |view, _, cx| {
-                            if matches!(view.loads.remove(&pane), Some(PaneLoad::Queued(false))) {
-                                true
-                            } else {
-                                view.requested.remove(&pane);
-                                view.model.pending.insert(pane);
-                                cx.notify();
-                                false
-                            }
-                        }).unwrap_or(false);
-                        if ready { load_future(cx, pane, produce, apply); }
+                        let ready = handle
+                            .update(cx, |view, _, cx| {
+                                if matches!(view.loads.remove(&pane), Some(PaneLoad::Queued(false)))
+                                {
+                                    true
+                                } else {
+                                    view.requested.remove(&pane);
+                                    view.model.pending.insert(pane);
+                                    cx.notify();
+                                    false
+                                }
+                            })
+                            .unwrap_or(false);
+                        if ready {
+                            load_future(cx, pane, produce, apply);
+                        }
                     }
                 })),
             );
