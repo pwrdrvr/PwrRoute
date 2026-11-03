@@ -221,6 +221,16 @@ struct Seen {
 /// wrote.
 const MAX_BYTES: u64 = 8 * 1024 * 1024;
 
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IoPoint {
+    RemoteRead,
+    LocalBackup,
+}
+
+#[cfg(test)]
+type IoHook = Arc<dyn Fn(IoPoint, &Path) + Send + Sync>;
+
 pub struct Syncer {
     data_dir: PathBuf,
     machine_name: String,
@@ -230,6 +240,8 @@ pub struct Syncer {
     state: State,
     seen: HashMap<(String, String), Seen>,
     status: Status,
+    #[cfg(test)]
+    io_hook: Option<IoHook>,
 }
 
 impl std::fmt::Debug for Syncer {
@@ -255,6 +267,8 @@ impl Syncer {
             state,
             seen: HashMap::new(),
             status: Status::default(),
+            #[cfg(test)]
+            io_hook: None,
         }
     }
 
@@ -473,6 +487,10 @@ impl Syncer {
                         return Health::Error(format!("Backing up before syncing: {e:#}"));
                     }
                 }
+                #[cfg(test)]
+                if let Some(hook) = &self.io_hook {
+                    hook(IoPoint::LocalBackup, &item.local);
+                }
                 match write_local(&item.local, &remote.bytes) {
                     Ok(()) => {
                         self.state.set_base(&id, &item.name, &remote.sha);
@@ -527,6 +545,10 @@ impl Syncer {
         }
         let path = folder.file(&item.name);
         let bytes = fs::read(&path).with_context(|| format!("reading {}", item.name))?;
+        #[cfg(test)]
+        if let Some(hook) = &self.io_hook {
+            hook(IoPoint::RemoteRead, &path);
+        }
         let sha = hash(&bytes);
         // Read again by stamp: a file still being written changes under us.
         let after = fs::metadata(&path).map(|m| Stamp::of(&m)).ok();
@@ -658,4 +680,110 @@ fn write_local(path: &Path, bytes: &[u8]) -> Result<()> {
         fs::create_dir_all(dir).with_context(|| dir.display().to_string())?;
     }
     write_atomic(path, bytes, "sync")
+}
+
+
+#[cfg(test)]
+mod revision_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    struct Fixture {
+        _dir: TempDir,
+        syncer: Syncer,
+        item: Item,
+        target: Target,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let data = dir.path().join("data");
+            let root = dir.path().join("cloud");
+            fs::create_dir_all(&data).unwrap();
+            fs::create_dir_all(&root).unwrap();
+            let item = Item {
+                name: "finicky.ts".into(),
+                local: data.join("finicky.ts"),
+                check: Arc::new(|_| Content::Valid),
+                runs_after: None,
+            };
+            fs::write(&item.local, b"base").unwrap();
+            let target = Target { kind: Kind::Folder, label: "Cloud".into(), root };
+            let mut syncer = Syncer::new(&data, "Here", "test");
+            syncer.set_items(vec![item.clone()]);
+            syncer.set_targets(vec![target.clone()]);
+            assert_eq!(syncer.sync_one(&item, &target, 1), Health::Pushed);
+            Self { _dir: dir, syncer, item, target }
+        }
+
+        fn remote(&self, bytes: &[u8]) {
+            self.target.folder().write(&self.item.name, bytes, &Machine::default(), 2, "test", None).unwrap();
+        }
+    }
+
+    #[test]
+    fn an_edit_during_remote_io_is_not_overwritten() {
+        let mut f = Fixture::new();
+        f.remote(b"folder revision");
+        let local = f.item.local.clone();
+        f.syncer.io_hook = Some(Arc::new(move |point, _| {
+            if point == IoPoint::RemoteRead {
+                fs::write(&local, b"intervening local edit").unwrap();
+            }
+        }));
+        let health = f.syncer.sync_one(&f.item, &f.target, 3);
+        assert_eq!(fs::read(&f.item.local).unwrap(), b"intervening local edit");
+        assert!(matches!(health, Health::Conflict(_)), "{health:?}");
+        assert_eq!(f.syncer.state.base(&f.target.id(), &f.item.name), Some(hash(b"base").as_str()));
+    }
+
+    #[test]
+    fn an_edit_after_backup_is_not_overwritten() {
+        let mut f = Fixture::new();
+        f.remote(b"folder revision");
+        f.syncer.io_hook = Some(Arc::new(|point, path| {
+            if point == IoPoint::LocalBackup {
+                fs::write(path, b"late external edit").unwrap();
+            }
+        }));
+        let health = f.syncer.sync_one(&f.item, &f.target, 3);
+        assert_eq!(fs::read(&f.item.local).unwrap(), b"late external edit");
+        assert_eq!(health, Health::Waiting(Wait::Settling));
+        assert_eq!(f.syncer.state.base(&f.target.id(), &f.item.name), Some(hash(b"base").as_str()));
+    }
+
+    #[test]
+    fn changed_remote_metadata_cannot_settle_old_bytes() {
+        let mut f = Fixture::new();
+        f.remote(b"old bytes");
+        // No manifest can endorse the read; it has to settle across passes.
+        fs::remove_file(f.target.folder().file(crate::MANIFEST)).unwrap();
+        f.syncer.io_hook = Some(Arc::new(|point, path| {
+            if point == IoPoint::RemoteRead {
+                fs::write(path, b"a different remote revision").unwrap();
+            }
+        }));
+        assert_eq!(f.syncer.sync_one(&f.item, &f.target, 3), Health::Waiting(Wait::Settling));
+        f.syncer.io_hook = None;
+        assert_eq!(f.syncer.sync_one(&f.item, &f.target, 4), Health::Waiting(Wait::Settling));
+        assert_eq!(fs::read(&f.item.local).unwrap(), b"base");
+        assert_eq!(f.syncer.sync_one(&f.item, &f.target, 5), Health::Pulled);
+        assert_eq!(fs::read(&f.item.local).unwrap(), b"a different remote revision");
+    }
+
+    #[test]
+    fn a_disappearing_remote_cannot_settle_cached_bytes() {
+        let mut f = Fixture::new();
+        f.remote(b"remote bytes");
+        let folder = f.target.folder();
+        let Probe::Present { stamp, .. } = folder.probe(&f.item.name) else { panic!("present") };
+        f.syncer.io_hook = Some(Arc::new(|point, path| {
+            if point == IoPoint::RemoteRead {
+                fs::remove_file(path).unwrap();
+            }
+        }));
+        assert!(f.syncer.read_remote(&folder, &f.item, &f.target.id(), stamp).is_err());
+        assert!(!f.syncer.seen.contains_key(&(f.target.id(), f.item.name.clone())));
+    }
 }
