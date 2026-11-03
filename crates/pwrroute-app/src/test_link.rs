@@ -138,6 +138,7 @@ pub struct TestLink {
     /// last step: whose default took the link.
     config_name: Option<String>,
     rules: RulesFile,
+    machine: pwrroute_engine::MachineFile,
     /// Handed in by the window, or built on the first test. A load error is
     /// not kept, so the next test tries again (after the config is fixed,
     /// say).
@@ -181,6 +182,7 @@ impl TestLink {
             task: None,
             worker,
             rules,
+            machine: crate::sync::machine(),
             run: None,
             request_token: Rc::new(()),
             expanding: false,
@@ -261,10 +263,12 @@ impl TestLink {
         let request_token = Rc::clone(&self.request_token);
         let field = self.url.text.clone();
         let network = self.network.clone();
+        self.machine = crate::sync::machine();
+        let machine = self.machine.clone();
         let sources = Sources {
             config: self.config.clone(),
             rules: self.rules.clone(),
-            machine: crate::sync::machine(),
+            machine: self.machine.clone(),
         };
         // Fetch the window's bounded worker without borrowing PwrRoute.
         let worker = self.worker.submit(crate::engine_worker::Lane::Link, Duration::ZERO, move |_| {
@@ -304,6 +308,7 @@ impl TestLink {
                         return;
                     }
                     let (trace, stamps) = result;
+                    if crate::sync::machine() != machine { this.test.run(cx); return; }
                     if !crate::engine_worker::unchanged(&stamps) { this.test.run(cx); return; }
                     this.test.finish(trace, opener, started);
                     cx.notify();
@@ -387,10 +392,13 @@ impl TestLink {
     /// in charge when there is one. A change to the saved tests alone
     /// routes nothing differently, so the run on screen stays.
     pub fn set_rules(&mut self, rules: RulesFile) {
-        if self.rules == rules {
+        let machine = crate::sync::machine();
+        let same_machine = self.machine == machine;
+        self.machine = machine;
+        if self.rules == rules && same_machine {
             return;
         }
-        let routing_unchanged = RulesFile {
+        let routing_unchanged = same_machine && RulesFile {
             tests: Vec::new(),
             ..self.rules.clone()
         } == RulesFile {
