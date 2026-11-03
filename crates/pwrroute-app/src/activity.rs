@@ -340,14 +340,21 @@ impl Feed {
     /// A dispatch just landed.
     pub fn push(&mut self, record: DispatchRecord) {
         let day = local_day(record.received_at);
-        if self.day != Some(day) {
+        // Delivery follows I/O completion, so an older local day can arrive
+        // after today's tally. Advance the counted day, never rewind it.
+        if self.day.is_none_or(|current| day > current) {
             self.day = Some(day);
             self.counts = Counts::default();
             self.tally = Tally::default();
         }
-        self.counts.count(&record);
-        self.tally.count(&record);
-        self.records.insert(0, record);
+        if self.day == Some(day) {
+            self.counts.count(&record);
+            self.tally.count(&record);
+        }
+        let index = self.records.partition_point(|other| {
+            (other.received_at, other.id) > (record.received_at, record.id)
+        });
+        self.records.insert(index, record);
         let capacity = self.capacity();
         self.records.truncate(capacity);
     }
@@ -3431,6 +3438,7 @@ mod tests {
     #[test]
     fn the_feed_counts_today_and_keeps_the_newest() {
         let url = "https://a.example/";
+        let received = SystemTime::now();
         let step = |id: u64, failed: bool| {
             let mut steps = vec![
                 Step::Received { url: url.into() },
@@ -3448,7 +3456,9 @@ mod tests {
             } else {
                 Step::Launched { dry_run: false }
             });
-            record(id, url, None, steps)
+            let mut record = record(id, url, None, steps);
+            record.received_at = received + Duration::from_nanos(id);
+            record
         };
         let mut feed = Feed::from_records(vec![step(3, true), step(2, false), step(1, false)]);
         let now = SystemTime::now();

@@ -164,6 +164,7 @@ pub(crate) struct Journal {
     config: JournalConfig,
     open: Option<(Day, fs::File)>,
     latest_day: Option<Day>,
+    latest_day_seeded: bool,
     /// The last write failure, reported once; cleared by the next success.
     error: Option<String>,
     /// The last pruning failure, reported once. Pruning is best effort:
@@ -177,6 +178,7 @@ impl Journal {
             config,
             open: None,
             latest_day: None,
+            latest_day_seeded: false,
             error: None,
             prune_error: None,
         }
@@ -207,6 +209,17 @@ impl Journal {
     }
 
     fn try_append(&mut self, record: &DispatchRecord) -> io::Result<()> {
+        if !self.latest_day_seeded {
+            // SetJournal can replace the writer while older accepted links
+            // are still in flight. Seed from filenames, never URL contents;
+            // a listing error must fail this append rather than lose the
+            // existing watermark and recreate an expired receipt day.
+            self.latest_day = journal_files(&self.config.dir)?
+                .into_iter()
+                .map(|(day, _)| day)
+                .max();
+            self.latest_day_seeded = true;
+        }
         let day = Day::from(record.received_at);
         let latest = self.latest_day.map_or(day, |latest| latest.max(day));
         self.latest_day = Some(latest);
