@@ -244,6 +244,117 @@ impl Drop for EngineWorker {
     }
 }
 
+
+pub type Stamps = Vec<(std::path::PathBuf, Option<std::time::SystemTime>)>;
+pub fn stamps(engine: &pwrroute_engine::Engine) -> Stamps {
+    engine
+        .dependencies()
+        .into_iter()
+        .map(|path| {
+            let at = modified(&path);
+            (path, at)
+        })
+        .collect()
+}
+fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+pub fn unchanged(stamps: &Stamps) -> bool {
+    stamps.iter().all(|(path, at)| modified(path) == *at)
+}
+
+struct Service {
+    tasks: [Option<gpui_kit::Task<()>>; LANES],
+    worker: EngineWorker,
+}
+impl gpui_kit::Global for Service {}
+/// Standalone importer/onboarding operations use one process-owned worker.
+pub fn service(cx: &mut gpui_kit::App) -> Client {
+    if cx.try_global::<Service>().is_none() {
+        cx.set_global(Service {
+            tasks: array::from_fn(|_| None),
+            worker: EngineWorker::new(),
+        });
+    }
+    cx.global::<Service>().worker.client()
+}
+
+#[cfg(test)]
+impl Client {
+    pub(crate) fn wait_idle(&self) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let queue = self.shared.queue.lock().unwrap();
+            if queue.pending.iter().all(Option::is_none)
+                && self.shared.active.load(Ordering::Acquire) == 0
+            {
+                return;
+            }
+            assert!(Instant::now() < deadline, "UI engine worker did not settle");
+            drop(
+                self.shared
+                    .wake
+                    .wait_timeout(queue, Duration::from_millis(10))
+                    .unwrap(),
+            );
+        }
+    }
+}
+#[cfg(test)]
+pub fn settle(cx: &mut gpui_kit::App) {
+    for window in cx.windows() {
+        if let Some(window) = window.downcast::<crate::app::PwrRoute>()
+            && let Ok(client) = window.read(cx).map(|app| app.engine_worker.client()) {
+            client.wait_idle();
+        }
+    }
+    if let Some(service) = cx.try_global::<Service>() {
+        service.worker.wait_idle();
+    }
+}
+
+pub fn hold(cx: &mut gpui_kit::App, lane: Lane, task: gpui_kit::Task<()>) {
+    let _ = service(cx);
+    cx.global_mut::<Service>().tasks[lane as usize] = Some(task);
+}
+
+pub fn cancel_service(cx: &mut gpui_kit::App, lane: Lane) {
+    if cx.try_global::<Service>().is_some() {
+        let service = cx.global_mut::<Service>();
+        service.tasks[lane as usize] = None;
+        service.worker.cancel(lane);
+    }
+}
+
+/// GPUI's deterministic test scheduler forbids wakes from OS threads.
+/// Tests wait on the same result channel when the completion task is
+/// polled; production suspends without blocking the UI thread.
+pub async fn receive<T>(
+    receiver: async_channel::Receiver<T>,
+) -> Result<T, async_channel::RecvError> {
+    #[cfg(test)]
+    {
+        receiver.recv_blocking()
+    }
+    #[cfg(not(test))]
+    {
+        receiver.recv().await
+    }
+}
+
+pub fn primary(path: Option<&std::path::Path>) -> Stamps {
+    path.map(|path| vec![(path.to_path_buf(), modified(path))])
+        .unwrap_or_default()
+}
+pub fn dependencies(mut before: Stamps, engine: &pwrroute_engine::Engine) -> Stamps {
+    for entry in stamps(engine) {
+        if !before.iter().any(|(path, _)| path == &entry.0) {
+            before.push(entry);
+        }
+    }
+    before
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,112 +456,3 @@ mod tests {
     }
 }
 
-pub type Stamps = Vec<(std::path::PathBuf, Option<std::time::SystemTime>)>;
-pub fn stamps(engine: &pwrroute_engine::Engine) -> Stamps {
-    engine
-        .dependencies()
-        .into_iter()
-        .map(|path| {
-            let at = modified(&path);
-            (path, at)
-        })
-        .collect()
-}
-fn modified(path: &std::path::Path) -> Option<std::time::SystemTime> {
-    std::fs::metadata(path).and_then(|m| m.modified()).ok()
-}
-pub fn unchanged(stamps: &Stamps) -> bool {
-    stamps.iter().all(|(path, at)| modified(path) == *at)
-}
-
-struct Service {
-    tasks: [Option<gpui_kit::Task<()>>; LANES],
-    worker: EngineWorker,
-}
-impl gpui_kit::Global for Service {}
-/// Standalone importer/onboarding operations use one process-owned worker.
-pub fn service(cx: &mut gpui_kit::App) -> Client {
-    if cx.try_global::<Service>().is_none() {
-        cx.set_global(Service {
-            tasks: array::from_fn(|_| None),
-            worker: EngineWorker::new(),
-        });
-    }
-    cx.global::<Service>().worker.client()
-}
-
-#[cfg(test)]
-impl Client {
-    pub(crate) fn wait_idle(&self) {
-        let deadline = Instant::now() + Duration::from_secs(30);
-        loop {
-            let queue = self.shared.queue.lock().unwrap();
-            if queue.pending.iter().all(Option::is_none)
-                && self.shared.active.load(Ordering::Acquire) == 0
-            {
-                return;
-            }
-            assert!(Instant::now() < deadline, "UI engine worker did not settle");
-            drop(
-                self.shared
-                    .wake
-                    .wait_timeout(queue, Duration::from_millis(10))
-                    .unwrap(),
-            );
-        }
-    }
-}
-#[cfg(test)]
-pub fn settle(cx: &mut gpui_kit::App) {
-    for window in cx.windows() {
-        if let Some(window) = window.downcast::<crate::app::PwrRoute>() {
-            if let Ok(client) = window.read(cx).map(|app| app.engine_worker.client()) {
-                client.wait_idle();
-            }
-        }
-    }
-    if let Some(service) = cx.try_global::<Service>() {
-        service.worker.wait_idle();
-    }
-}
-
-pub fn hold(cx: &mut gpui_kit::App, lane: Lane, task: gpui_kit::Task<()>) {
-    cx.global_mut::<Service>().tasks[lane as usize] = Some(task);
-}
-
-pub fn cancel_service(cx: &mut gpui_kit::App, lane: Lane) {
-    if cx.try_global::<Service>().is_some() {
-        let service = cx.global_mut::<Service>();
-        service.tasks[lane as usize] = None;
-        service.worker.cancel(lane);
-    }
-}
-
-/// GPUI's deterministic test scheduler forbids wakes from OS threads.
-/// Tests wait on the same result channel when the completion task is
-/// polled; production suspends without blocking the UI thread.
-pub async fn receive<T>(
-    receiver: async_channel::Receiver<T>,
-) -> Result<T, async_channel::RecvError> {
-    #[cfg(test)]
-    {
-        receiver.recv_blocking()
-    }
-    #[cfg(not(test))]
-    {
-        receiver.recv().await
-    }
-}
-
-pub fn primary(path: Option<&std::path::Path>) -> Stamps {
-    path.map(|path| vec![(path.to_path_buf(), modified(path))])
-        .unwrap_or_default()
-}
-pub fn dependencies(mut before: Stamps, engine: &pwrroute_engine::Engine) -> Stamps {
-    for entry in stamps(engine) {
-        if !before.iter().any(|(path, _)| path == &entry.0) {
-            before.push(entry);
-        }
-    }
-    before
-}
