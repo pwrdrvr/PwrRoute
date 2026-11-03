@@ -23,6 +23,7 @@
 
 pub mod decide;
 pub mod folder;
+mod local;
 pub mod places;
 mod schedule;
 mod service;
@@ -31,6 +32,7 @@ mod syncer;
 
 pub use decide::ConflictKind;
 pub use folder::{FOLDER, FileEntry, Folder, MANIFEST, Machine, Manifest, hash};
+pub use local::LocalFile;
 pub use places::{Env, Kind, Os, Place, classify, detect};
 pub use schedule::{Schedule, Why};
 pub use service::{Clock, EVERY, Service, SystemClock, TICK};

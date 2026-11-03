@@ -140,6 +140,8 @@ pub fn edit_rules(path: Option<&Path>, edit: impl FnOnce(&mut RulesFile)) -> Res
     let Some(path) = path else {
         return Ok(());
     };
+    let held = pwrroute_sync::LocalFile::try_lock(path).map_err(|error| format!("{error:#}"))?;
+    let path = held.path();
     let mut rules = RulesFile::load(path)
         .map_err(|_| "rules.json did not load, so it is not overwritten".to_owned())?;
     edit(&mut rules);
@@ -798,6 +800,19 @@ mod tests {
     /// A `set_source` for tests that never turn the config off.
     fn no_source() -> SetSource {
         Rc::new(|_, _| panic!("this test turns no config off"))
+    }
+
+    #[test]
+    fn edit_rules_reports_sync_contention_without_running_the_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rules.json");
+        let held = pwrroute_sync::LocalFile::lock(&path).unwrap();
+        let error = edit_rules(Some(&path), |_| panic!("lock refused before editing")).unwrap_err();
+        assert!(error.contains("try saving again"));
+        assert!(!path.exists());
+        drop(held);
+        edit_rules(Some(&path), |file| file.default_browser = "Firefox".into()).unwrap();
+        assert_eq!(RulesFile::load(&path).unwrap().default_browser, "Firefox");
     }
 
     fn fixture_home() -> PathBuf {

@@ -219,7 +219,9 @@ their own modules.
   missing (Settings › Cloud Sync, `settings/AGENTS.md`); it wakes on
   window activation and after an agent's `pwrroute_rules_apply`, and a
   pull is followed by `app::sync_rules_windows`, so every writer goes
-  through the same path. `sync::machine()` is this machine's
+  through the same path. Local writers hold pwrroute-sync's `LocalFile`
+  across their revision check and write; GPUI writers use `try_lock` and
+  report contention, preserving unsaved edits for a later save. `sync::machine()` is this machine's
   `machine.json`; every engine that resolves a link takes it as
   `Sources::machine`, and `edit_machine` is the one writer (it refuses a
   `machine.json` that does not parse rather than save over it);

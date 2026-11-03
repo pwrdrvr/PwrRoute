@@ -505,6 +505,7 @@ fn revision_of(path: &Path) -> String {
 impl RulesStore for LiveRules {
     fn read(&self) -> Result<RulesSnapshot> {
         let _held = self.locked();
+        let _file = pwrroute_sync::LocalFile::lock(&self.path)?;
         self.snapshot()
     }
 
@@ -515,6 +516,7 @@ impl RulesStore for LiveRules {
         dry_run: bool,
     ) -> std::result::Result<RulesSnapshot, RulesError> {
         let _held = self.locked();
+        let file_lock = pwrroute_sync::LocalFile::lock(&self.path).context("locking rules.json")?;
         let current = revision_of(&self.path);
         if current != base_revision {
             return Err(RulesError::Conflict {
@@ -530,7 +532,7 @@ impl RulesStore for LiveRules {
         }
         let file: RulesFile = serde_json::from_value(validated)
             .map_err(|e| RulesError::Other(anyhow!("re-reading the validated rules: {e}")))?;
-        file.save(&self.path)
+        file.save(file_lock.path())
             .map_err(|e| RulesError::Other(e.context("writing rules.json")))?;
         Ok(self.snapshot()?)
     }
@@ -918,7 +920,10 @@ mod tests {
         let start = Arc::new(std::sync::Barrier::new(WRITERS));
         let writers: Vec<_> = (0..WRITERS)
             .map(|writer| {
-                let rules = Arc::clone(&rules);
+                // Independent backends have different instance mutexes, as
+                // the app and sync do. Only the shared file guard coordinates
+                // their revision checks with writes.
+                let rules = LiveRules::new(path.clone(), || None);
                 let start = Arc::clone(&start);
                 std::thread::spawn(move || {
                     start.wait();
