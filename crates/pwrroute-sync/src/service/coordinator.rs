@@ -671,4 +671,115 @@ mod tests {
         );
         assert!(!local.exists());
     }
+    fn status_fixture() -> (tempfile::TempDir, tempfile::TempDir, Target, Coordinator) {
+        let data = tempfile::tempdir().unwrap();
+        let cloud = tempfile::tempdir().unwrap();
+        let target = target(cloud.path());
+        let local = data.path().join("rules.json");
+        fs::write(&local, b"rules").unwrap();
+        target.folder().write("rules.json", b"rules", &Machine { id: "writer".into(), name: "Writer".into() }, 1, "test", None).unwrap();
+        target.folder().write("finicky.ts", b"config", &Machine::default(), 2, "test", None).unwrap();
+        let mut syncer = Syncer::new(data.path(), "test", "test");
+        syncer.set_items(vec![item(local, "rules.json")]);
+        syncer.set_targets(vec![target.clone()]);
+        syncer.pass(3);
+        assert_eq!(syncer.status().targets[0].folder_files.len(), 2);
+        let (coordinator, _rx) = coordinator(syncer);
+        (data, cloud, target, coordinator)
+    }
+
+    fn ready(c: &mut Coordinator, target: &Target) {
+        let observation = Disk.read(target, "rules.json", None, &Cancel::default());
+        let permit = Permit::acquire(&c.admission, &target.root).unwrap();
+        c.runs.get_mut(&target.root).unwrap().phase = Phase::Ready(observation, permit);
+    }
+
+    #[test]
+    fn review_missing_or_invalid_manifest_clears_previous_status_metadata() {
+        for replacement in [None, Some(b"{ broken".as_slice()), Some(br#"{"format":999,"files":{}}"#.as_slice())] {
+            let (_data, _cloud, target, mut c) = status_fixture();
+            let path = target.folder().file(crate::MANIFEST);
+            match replacement { Some(bytes) => fs::write(&path, bytes).unwrap(), None => fs::remove_file(&path).unwrap() }
+            c.tick(1_000, &|_| {});
+            assert_eq!(c.syncer.status().targets[0].folder_files.len(), 2, "starting a read retains the last known manifest");
+            ready(&mut c, &target);
+            c.drive(1_100, &|_| {});
+            let status = &c.syncer.status().targets[0];
+            assert_eq!(status.files[0].health, Health::InSync);
+            assert!(status.saved_by.is_none(), "completed absence clears authorship");
+            assert!(status.saved_at.is_none(), "completed absence clears saved time");
+            assert!(status.folder_files.is_empty(), "completed absence clears import candidates");
+        }
+    }
+
+    #[test]
+    fn review_failure_before_observing_manifest_retains_previous_metadata() {
+        let (_data, _cloud, target, mut c) = status_fixture();
+        let before = c.syncer.status().targets[0].clone();
+        c.tick(1_000, &|_| {});
+        let cancel = c.runs[&target.root].cancel.clone();
+        let permit = Permit::acquire(&c.admission, &target.root).unwrap();
+        c.command(Command::Completed(Box::new(Completion { target, cancel, permit, outcome: Outcome::Failed })), 1_100, &|_| {});
+        let after = &c.syncer.status().targets[0];
+        assert_eq!(after.saved_by, before.saved_by);
+        assert_eq!(after.saved_at, before.saved_at);
+        assert_eq!(after.folder_files, before.folder_files);
+    }
+
+    #[test]
+    fn review_old_run_finishing_after_a_newer_target_uses_completion_time() {
+        let (data, _cloud, slow, mut c) = status_fixture();
+        c.tick(1_000, &|_| {});
+        // Own the old target's permit without starting a real worker.
+        c.runs.get_mut(&slow.root).unwrap().phase = Phase::Reading;
+        let slow_permit = Permit::acquire(&c.admission, &slow.root).unwrap();
+        let slow_cancel = c.runs[&slow.root].cancel.clone();
+        let slow_observation = Disk.read(&slow, "rules.json", None, &Cancel::default());
+        let fast_cloud = tempfile::tempdir().unwrap();
+        let fast = target(fast_cloud.path());
+        fast.folder().write("rules.json", b"rules", &Machine::default(), 2, "test", None).unwrap();
+        c.command(Command::Targets(vec![slow.clone(), fast.clone()]), 2_000, &|_| {});
+        c.tick(2_000, &|_| {});
+        ready(&mut c, &fast);
+        c.drive(2_100, &|_| {});
+        let fast_completed = c.syncer.status().last_pass;
+        c.command(Command::Completed(Box::new(Completion { target: slow.clone(), cancel: slow_cancel, permit: slow_permit, outcome: Outcome::Read(slow_observation) })), 3_000, &|_| {});
+        c.drive(3_000, &|_| {});
+        assert_eq!(fast_completed, Some(2_100));
+        assert_eq!(c.syncer.status().last_pass, Some(3_000), "an older run cannot move status back to its start time");
+        assert_eq!(c.syncer.status().targets[0].last_synced, Some(3_000));
+        assert_eq!(c.syncer.status().targets[1].last_synced, Some(2_100));
+        let state: serde_json::Value = serde_json::from_slice(&fs::read(data.path().join("sync/state.json")).unwrap()).unwrap();
+        assert_eq!(state["lastSynced"][slow.id()], 3_000);
+        assert_eq!(state["lastSynced"][fast.id()], 2_100);
+    }
+
+    #[test]
+    fn review_pending_write_records_status_at_completion_without_rewriting_manifest_time() {
+        let data = tempfile::tempdir().unwrap();
+        let cloud = tempfile::tempdir().unwrap();
+        let target = target(cloud.path());
+        let local = data.path().join("rules.json");
+        fs::write(&local, b"rules").unwrap();
+        let item = item(local, "rules.json");
+        let mut syncer = Syncer::new(data.path(), "test", "test");
+        syncer.set_items(vec![item.clone()]);
+        syncer.set_targets(vec![target.clone()]);
+        let (mut c, _rx) = coordinator(syncer);
+        c.tick(1_000, &|_| {});
+        let observation = Disk.read(&target, &item.name, None, &Cancel::default());
+        let (_, write) = c.syncer.prepare(&item, &target, observation, 1_000);
+        let write = write.unwrap();
+        let manifest = Disk.write(&target, &write, &Cancel::default()).unwrap();
+        let cancel = c.runs[&target.root].cancel.clone();
+        c.runs.get_mut(&target.root).unwrap().phase = Phase::Writing(write);
+        let permit = Permit::acquire(&c.admission, &target.root).unwrap();
+        c.command(Command::Completed(Box::new(Completion { target: target.clone(), cancel, permit, outcome: Outcome::Written(Ok(manifest)) })), 5_000, &|_| {});
+        assert_eq!(c.syncer.status().last_pass, Some(5_000));
+        assert_eq!(c.syncer.status().targets[0].last_synced, Some(5_000));
+        assert_eq!(c.syncer.status().targets[0].saved_at, Some(1_000), "manifest attribution stays with the written content");
+        let state: serde_json::Value = serde_json::from_slice(&fs::read(data.path().join("sync/state.json")).unwrap()).unwrap();
+        assert_eq!(state["lastSynced"][target.id()], 5_000);
+    }
+
 }
