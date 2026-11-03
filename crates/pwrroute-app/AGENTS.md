@@ -1006,7 +1006,12 @@ their own modules.
   may switch back to an older release, and a switch back never installs
   on quit. `updater::ready` is the downloaded release this slot offers
   (`ready_in`, the filter Settings › Updates uses); it reads the manifest
-  from disk, so surfaces read `update_notice`'s cache instead.
+  from disk, so surfaces read `update_notice`'s cache instead. Every
+  `set_state` wakes the `on_change` listeners, but Settings › Updates is
+  rebuilt (another manifest read) only when `settings_changed` says it
+  draws the change: a download's percent is the toast's alone, so its
+  ticks skip the pane, and `update_notice::follow` keeps its cached ready
+  release under the same rule.
 - **Update notices (`update_notice.rs`, `toast.rs`; after PwrSnap's
   `features/update`).** `update_notice::Notices` is plain data over the
   updater's `State` (`updater::on_change` calls `follow` after each

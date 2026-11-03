@@ -310,8 +310,9 @@ pub fn installed_version() -> String {
     }
 }
 
-/// Wakes [`install`]'s task after every change to [`state`].
-static CHANGED: OnceLock<async_channel::Sender<()>> = OnceLock::new();
+/// Wakes [`install`]'s task after every change to [`state`], saying
+/// whether Settings › Updates draws it ([`settings_changed`]).
+static CHANGED: OnceLock<async_channel::Sender<bool>> = OnceLock::new();
 
 /// A surface that follows the updater (`update_notice`): called on the
 /// GPUI thread after every change to [`state`], it reads it again.
@@ -333,17 +334,48 @@ pub fn state() -> State {
 }
 
 fn set_state(edit: impl FnOnce(&mut State)) {
-    edit(&mut STATE.lock().unwrap_or_else(PoisonError::into_inner));
+    let settings = {
+        let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = state.clone();
+        edit(&mut state);
+        settings_changed(&before, &state)
+    };
     if let Some(changed) = CHANGED.get() {
-        let _ = changed.try_send(());
+        let _ = changed.try_send(settings);
     }
 }
 
-/// Redraws Settings › Updates whenever a check starts or finishes, and
+/// Whether going from `before` to `after` changes what Settings › Updates
+/// draws: everything but the download in flight, which only the update
+/// toast shows (`update_notice`). A download reports every percent, so
+/// those changes skip rebuilding the pane, which reads the install's
+/// manifest from disk.
+pub fn settings_changed(before: &State, after: &State) -> bool {
+    // Every field by name, so a new one has to be sorted here.
+    let State {
+        checking,
+        last,
+        releases,
+        held,
+        download: _,
+        finished,
+        restarting,
+    } = before;
+    *checking != after.checking
+        || *last != after.last
+        || *releases != after.releases
+        || *held != after.held
+        || *finished != after.finished
+        || *restarting != after.restarting
+}
+
+/// Redraws Settings › Updates whenever what it draws changes, tells the
+/// [`on_change`] listeners about every change (a download's percent too),
+/// and
 /// checks again every [`CHECK_EVERY`] on a Velopack install. Call once,
 /// after `settings` is installed.
 pub fn install(cx: &mut App) {
-    let (tx, rx) = async_channel::unbounded::<()>();
+    let (tx, rx) = async_channel::unbounded::<bool>();
     if CHANGED.set(tx).is_err() {
         return;
     }
@@ -355,10 +387,17 @@ pub fn install(cx: &mut App) {
         set_state(|state| state.held = Some(held));
     }
     cx.spawn(async move |cx| {
-        while rx.recv().await.is_ok() {
+        while let Ok(first) = rx.recv().await {
+            // A burst of changes (a fast download's percents) is one pass.
+            let mut settings = first;
+            while let Ok(more) = rx.try_recv() {
+                settings |= more;
+            }
             cx.update(|cx| {
-                let updates = crate::settings::updates_host::model();
-                crate::settings::update(cx, move |model| model.updates = updates);
+                if settings {
+                    let updates = crate::settings::updates_host::model();
+                    crate::settings::update(cx, move |model| model.updates = updates);
+                }
                 let listeners = LISTENERS
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
@@ -810,6 +849,48 @@ fn log(trigger: Trigger, outcome: &Outcome) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A download's percent is the toast's alone; everything else is
+    /// Settings › Updates' too, so only those changes rebuild the pane.
+    #[test]
+    fn only_changes_settings_draws_rebuild_settings() {
+        let downloading = State {
+            checking: true,
+            download: Some(Download {
+                version: "0.15.0".into(),
+                switch_back: false,
+                percent: Some(41),
+            }),
+            ..State::default()
+        };
+        let mut ticked = downloading.clone();
+        if let Some(download) = &mut ticked.download {
+            download.percent = Some(42);
+        }
+        assert!(!settings_changed(&downloading, &ticked), "a percent tick");
+        let mut started = downloading.clone();
+        started.download = None;
+        assert!(!settings_changed(&started, &downloading), "a download starts");
+
+        let mut done = downloading.clone();
+        done.checking = false;
+        assert!(settings_changed(&downloading, &done), "checking");
+        let mut held = downloading.clone();
+        held.held = Some(Held {
+            version: "0.15.0".into(),
+            file_name: "PwrRoute-0.15.0-full.nupkg".into(),
+            slot: "stable:latest".into(),
+            switch_back: false,
+        });
+        assert!(settings_changed(&downloading, &held), "held");
+        let mut answered = downloading.clone();
+        answered.last = Some((SystemTime::UNIX_EPOCH, Outcome::UpToDate("0.14.0".into())));
+        assert!(settings_changed(&downloading, &answered), "last");
+        let mut restarting = downloading.clone();
+        restarting.restarting = true;
+        assert!(settings_changed(&downloading, &restarting), "restarting");
+        assert!(!settings_changed(&downloading, &downloading.clone()), "no change");
+    }
 
     #[test]
     fn a_dev_build_has_no_installation_and_nothing_to_restart_into() {
