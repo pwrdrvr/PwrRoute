@@ -941,6 +941,20 @@ mod tests {
     }
 
     #[test]
+    fn launcher_forks_share_options_and_order_catalog_aliases_together() {
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = BrowserLauncher::with_env(Env::fixture(Platform::MacOs, dir.path()));
+        let clone = launcher.clone();
+        launcher.yield_browser_focus.store(true, Ordering::Relaxed);
+        assert!(clone.yield_browser_focus.load(Ordering::Relaxed));
+        let fork = launcher.fork().unwrap();
+        let chrome = browser("Google Chrome", AppType::AppName);
+        let mut profile = browser("com.google.Chrome", AppType::BundleId);
+        profile.profile = "Work".into();
+        assert_eq!(launcher.ordering_key(&chrome), fork.ordering_key(&profile));
+    }
+
+    #[test]
     fn the_launcher_plans_the_browsers_crate_command_for_the_engines_browser() {
         let dir = tempfile::tempdir().unwrap();
         let launcher = BrowserLauncher::with_env(Env::fixture(Platform::MacOs, dir.path()));

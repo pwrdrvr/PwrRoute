@@ -669,6 +669,7 @@ impl Router {
     ) -> std::io::Result<Self> {
         let (tx, rx) = mpsc::sync_channel(128);
         let admission = Arc::new(Admission::default());
+        let worker_admission = admission.clone();
         let io = Pipeline::new(Box::new(launcher), tx.clone(), options.network.clone())?;
         let on_received = options.on_received.clone();
         let diagnostic_log = options.diagnostic_log.clone();
@@ -687,6 +688,7 @@ impl Router {
             .spawn(move || {
                 Worker {
                     resolver: build(resolver),
+                    admission: worker_admission,
                     io,
                     recent: worker_recent,
                     journal: options.journal.clone().map(Journal::new),
@@ -834,7 +836,7 @@ impl RouterHandle {
     ///
     /// [`status`]: Self::status
     pub fn refresh(&self) -> std::result::Result<(), RouterGone> {
-        self.send(Command::Refresh)
+        self.admission.refresh(&self.tx)
     }
 
     /// Recent dispatches, newest first.
@@ -1180,6 +1182,7 @@ fn build(factory: Option<ResolverFactory>) -> std::result::Result<Box<dyn Resolv
 }
 
 struct Worker {
+    admission: Arc<Admission>,
     resolver: std::result::Result<Box<dyn Resolver>, String>,
     io: Pipeline,
     recent: Arc<RecentDispatches>,
@@ -1315,19 +1318,17 @@ impl Worker {
                     browser = destination.browser_for(&browser.url, privacy);
                     privacy = browser.privacy;
                 }
-                Some(Took::Held(sent)) => {
-                    // Retention can change while a reserved hold expands.
-                    // Never hold a link that would have nowhere to wait.
-                    if self.recent.retention().count > 0 {
+                // Retention can change while a reserved hold expands.
+                // Never hold a link that would have nowhere to wait.
+                Some(Took::Held(sent)) if self.recent.retention().count > 0 => {
                         record.steps.push(Step::Held {
                             held: sent,
                             skipped: skipped_handler(&record.steps),
                             browser: (browser.app_type != AppType::None).then(|| browser.clone()),
                         });
                         held = true;
-                    }
                 }
-                None => {}
+                Some(Took::Held(_)) | None => {}
             },
             Mode::Test => {}
             Mode::Release {

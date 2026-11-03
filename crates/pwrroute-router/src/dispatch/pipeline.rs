@@ -14,6 +14,7 @@ struct Budget {
 pub(super) struct Admission {
     budget: Mutex<Budget>,
     send_lock: Mutex<()>,
+    refresh_requested: AtomicBool,
     changed: Condvar,
 }
 
@@ -25,6 +26,7 @@ impl Default for Admission {
                 closed: false,
             }),
             send_lock: Mutex::new(()),
+            refresh_requested: AtomicBool::new(false),
             changed: Condvar::new(),
         }
     }
@@ -64,6 +66,18 @@ impl Admission {
         // Never hold the budget while waiting for the bounded mailbox:
         // the owner must be able to release completed work's permits.
         tx.send(command).map_err(|_| RouterGone)
+    }
+
+    pub(super) fn refresh(&self, tx: &mpsc::SyncSender<Command>) -> std::result::Result<(), RouterGone> {
+        // A watcher can be joined during resolver replacement on the owner.
+        // It must never block waiting for that owner's full command mailbox.
+        let budget = self.budget.lock().unwrap_or_else(PoisonError::into_inner);
+        if budget.closed { return Err(RouterGone); }
+        self.refresh_requested.store(true, Ordering::SeqCst);
+        match tx.try_send(Command::Refresh) {
+            Ok(()) | Err(mpsc::TrySendError::Full(_)) => Ok(()),
+            Err(mpsc::TrySendError::Disconnected(_)) => Err(RouterGone),
+        }
     }
 
     pub(super) fn close(&self, tx: &mpsc::SyncSender<Command>) {
@@ -193,14 +207,14 @@ pub(super) struct Attempt {
 /// A lane has at most one assigned item. Its thread is joined, never
 /// detached: a deadline cannot leave an old launch running behind a retry.
 struct Lane<T> {
-    tx: Option<mpsc::Sender<T>>,
+    tx: Option<mpsc::SyncSender<T>>,
     thread: Option<thread::JoinHandle<()>>,
     busy: Option<String>,
 }
 
 impl<T: Send + 'static> Lane<T> {
     fn spawn(name: &str, mut run: impl FnMut(T) + Send + 'static) -> std::io::Result<Self> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new().name(name.into()).spawn(move || {
             while let Ok(item) = rx.recv() {
                 run(item);
@@ -216,7 +230,7 @@ impl<T: Send + 'static> Lane<T> {
     fn send(&mut self, item: T, key: String) {
         self.busy = Some(key);
         // The owning lane cannot stop while the actor is alive.
-        if self.tx.as_ref().unwrap().send(item).is_err() {
+        if self.tx.as_ref().unwrap().try_send(item).is_err() {
             panic!("router I/O lane stopped");
         }
     }
@@ -440,6 +454,9 @@ impl Worker {
                 }
                 Command::Shutdown => stopping = true,
             }
+            if self.admission.refresh_requested.swap(false, Ordering::SeqCst) {
+                self.refresh_config();
+            }
             self.pump();
         }
     }
@@ -515,10 +532,7 @@ impl Worker {
         // Schedule expansion only on idle lanes; the owner never waits for
         // a worker's input queue. The admission permit bounds all stages,
         // including completed expansions waiting behind Catch.
-        loop {
-            let Some(lane) = self.io.expand.iter().position(|lane| lane.busy.is_none()) else {
-                break;
-            };
+        while let Some(lane) = self.io.expand.iter().position(|lane| lane.busy.is_none()) {
             let Some(index) = self
                 .io
                 .waiting
@@ -622,6 +636,13 @@ impl Worker {
         attempt: u8,
         started: Instant,
     ) {
+        if is_self(&browser) {
+            let mut record = record;
+            record.steps.push(Step::LaunchFailed { message: "the fallback browser is PwrRoute itself".into() });
+            record.outcome = Outcome::Failed;
+            self.finish(job, record);
+            return;
+        }
         let diagnostic = self.options.diagnostic_log.is_some()
             && keeps_links(self.recent.retention(), self.options.journal.as_ref());
         self.io.launching.push_back(Launch {

@@ -786,3 +786,62 @@ fn count_retention_keeps_newest_receipts_when_old_expansion_completes_last() {
     );
     assert!(handle.get(first).is_none());
 }
+
+#[test]
+fn refresh_coalesces_when_mailbox_is_full_instead_of_blocking_a_joined_watcher() {
+    let admission = super::super::pipeline::Admission::default();
+    let (tx, rx) = mpsc::sync_channel(1);
+    tx.send(Command::Refresh).unwrap();
+    admission.refresh(&tx).unwrap();
+    assert!(matches!(rx.try_recv(), Ok(Command::Refresh)));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn override_to_pwrroute_is_refused_without_launching_or_fallback() {
+    let launcher = DryRunLauncher::new();
+    let router = Router::spawn(Options::default(), None, launcher.clone()).unwrap();
+    let handle = router.handle();
+    handle.set_paused(Some(PauseTarget { browser: "PwrRoute".into(), profile: String::new() }));
+    let record = handle.dispatch_and_wait(link("https://example.com/self")).unwrap();
+    assert_eq!(record.outcome, Outcome::Failed);
+    assert!(launcher.launched().is_empty());
+}
+
+#[test]
+fn fallback_waits_for_its_browser_and_release_passes_over_an_armed_override() {
+    let (entered, events) = mpsc::channel();
+    let gate = Gate::default();
+    let router = Router::spawn(Options { fallback: FallbackSource::fixed("Fast", ""), ..Options::default() },
+        Some(policy_factory(Arc::new(Mutex::new(ShortLinks::off())))),
+        ParallelLaunch { entered, gate: gate.clone(), fail_slow: true }).unwrap();
+    let _release = Release(gate.clone());
+    let handle = router.handle();
+    handle.set_hold(Some(SendScope::next(1)));
+    let held = handle.dispatch_and_wait(link("https://fast.example/held")).unwrap();
+    let blocked = handle.dispatch(link("https://fast.example/slow")).unwrap();
+    assert_eq!(events.recv_timeout(DEADLINE).unwrap().name, "Fast");
+    let fallback = handle.dispatch(link("https://slow.example/private")).unwrap();
+    assert_eq!(events.recv_timeout(DEADLINE).unwrap().name, "Slow");
+    handle.set_send_to(Some(SendTo::next(Destination { browser: "Other".into(), profile: String::new(), private: false })));
+    let other = handle.dispatch_and_wait(link("https://fast.example/other")).unwrap();
+    assert_eq!(events.recv_timeout(DEADLINE).unwrap().name, "Other");
+    assert_eq!(other.outcome, Outcome::Opened);
+    assert!(handle.get(fallback).is_none());
+    assert!(events.try_recv().is_err(), "fallback bypassed its busy browser");
+    // An explicitly released link uses its destination, without consuming
+    // the send that will govern the next ordinary dispatch.
+    handle.set_send_to(Some(next(1)));
+    let released = handle.open_not_opened(held.id, OpenAs::In(Destination { browser: "Released".into(), profile: String::new(), private: false })).unwrap();
+    assert_eq!(events.recv_timeout(DEADLINE).unwrap().name, "Released");
+    assert_eq!(released.browser.unwrap().name, "Released");
+    assert_eq!(handle.send_to().unwrap().scope, SendScope::next(1));
+    gate.open();
+    drop(router);
+    assert_eq!(handle.get(blocked).unwrap().outcome, Outcome::Opened);
+    let fallback = handle.get(fallback).unwrap();
+    assert_eq!(fallback.browser.as_ref().unwrap().name, "Fast");
+    assert!(fallback.browser.as_ref().unwrap().private);
+    assert_eq!(fallback.privacy, Privacy::Host);
+    assert_eq!(events.try_iter().count(), 1);
+}
