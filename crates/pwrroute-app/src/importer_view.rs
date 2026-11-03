@@ -290,7 +290,7 @@ fn recent_links(cx: &App) -> Vec<String> {
 
 /// Opens the importer on the config at `path`: on Review, or (`first_run`)
 /// on Choose source with every proven rule checked, as
-/// [`open_from_first_run`] does. A second call replaces what the open
+/// [`open_from_first_run_session`] does. A second call replaces what the open
 /// importer shows.
 pub fn open(path: PathBuf, first_run: bool, cx: &mut App) {
     open_with(path, first_run, crate::router::config_in_charge(), cx);
@@ -307,10 +307,6 @@ pub(crate) fn open_with(path: PathBuf, first_run: bool, in_charge: Option<PathBu
 /// `rules` (through the main window's store when it is open; the main
 /// window is never opened for it), and `on_done` hears how the importer was
 /// left.
-pub fn open_from_first_run(path: PathBuf, rules: Option<PathBuf>, on_done: OnDone, cx: &mut App) {
-    open_from_first_run_session(path, rules, on_done, ImportSession::default(), cx);
-}
-
 pub(crate) fn open_from_first_run_session(
     path: PathBuf,
     rules: Option<PathBuf>,
