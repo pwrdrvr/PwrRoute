@@ -19,7 +19,7 @@
 //! the count and any source-save error, or cancelled before rules were saved.
 //! A source-save retry keeps the saved stage and never imports the rules again.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -93,6 +93,7 @@ pub struct ImportDone {
     /// `rules.json` before the import, and the source before it.
     pub previous: RulesFile,
     pub previous_source: Option<SourceSettings>,
+    pub(crate) saved_rules: SavedRules,
     /// Undo is good until the next edit to `rules.json`.
     pub undoable: bool,
     /// Rules were restored, but restoring the durable source may need retry.
@@ -125,17 +126,73 @@ pub enum ImportOutcome {
     },
 }
 
+/// The committed file a source stage belongs to. Undo invalidates every
+/// clone immediately; other writers are detected against the saved file.
+#[derive(Clone, Debug)]
+pub(crate) struct SavedRules {
+    path: Option<PathBuf>,
+    file: RulesFile,
+    retry_valid: Rc<Cell<bool>>,
+}
+
+impl SavedRules {
+    pub(crate) fn new(path: Option<&Path>, file: RulesFile) -> Self {
+        Self {
+            path: path.map(Path::to_path_buf),
+            file,
+            retry_valid: Rc::new(Cell::new(true)),
+        }
+    }
+
+    pub(crate) fn invalidate(&self) {
+        self.retry_valid.set(false);
+    }
+
+    fn check(&self) -> Result<(), String> {
+        let unchanged = self.retry_valid.get()
+            && self
+                .path
+                .as_ref()
+                .and_then(|path| RulesFile::load(path).ok())
+                .is_some_and(|file| file == self.file);
+        if unchanged {
+            Ok(())
+        } else {
+            self.invalidate();
+            Err("The imported rules were undone or changed. Close this window and review the import again before changing its source.".to_owned())
+        }
+    }
+}
+
 /// The rules half has committed. A source retry reuses this count and
 /// never writes rules.json or replaces the original Undo snapshot again.
 #[derive(Clone, Debug)]
 struct SavedImport {
     count: usize,
+    rules: SavedRules,
+    source: Option<SourceSettings>,
     keeps_config: bool,
     source_error: Option<String>,
 }
 
 impl SavedImport {
+    fn validate(&self, cx: &App) -> Result<(), String> {
+        self.rules.check()?;
+        if let Some(source) = &self.source {
+            let unchanged = settings_store::store(cx)
+                .is_some_and(|store| store.read(cx).settings().source == *source);
+            if !unchanged {
+                self.rules.invalidate();
+                return Err("The source choice changed since this import. Review the import again before completing it.".to_owned());
+            }
+        }
+        Ok(())
+    }
+
     fn outcome(self) -> ImportOutcome {
+        if self.rules.check().is_err() {
+            return ImportOutcome::Cancelled;
+        }
         ImportOutcome::Imported {
             count: self.count,
             keeps_config: self.keeps_config,
@@ -161,6 +218,32 @@ struct FromFirstRun {
 /// and count, even if every imported rule is now a duplicate.
 #[derive(Clone, Default)]
 pub(crate) struct ImportSession(Rc<RefCell<Option<(ImportModel, SavedImport)>>>);
+
+impl ImportSession {
+    pub(crate) fn clear(&self) {
+        self.0.borrow_mut().take();
+    }
+
+    /// Only an unchanged committed stage can complete a cached first-run
+    /// answer. Retry persistence without replacing an active CLI override.
+    pub(crate) fn revalidate_completed(&self, cx: &mut App) -> Result<(), String> {
+        let saved = self
+            .0
+            .borrow()
+            .as_ref()
+            .map(|(_, saved)| saved.clone())
+            .ok_or("The import is no longer pending. Review it again.")?;
+        saved.validate(cx)?;
+        if let Some(source) = saved.source {
+            let result = persist_source(source, false, cx);
+            if cx.has_global::<SourceNotice>() {
+                cx.global_mut::<SourceNotice>().rules = Some(saved.rules);
+            }
+            result?;
+        }
+        Ok(())
+    }
+}
 
 /// The main window, when one is open.
 fn main_window(cx: &App) -> Option<WindowHandle<PwrRoute>> {
@@ -432,12 +515,14 @@ impl Importer {
         let mut model = self.model.clone();
         model.refused = None;
         let from_first_run = self.from_first_run.take();
-        let saved_count = self.saved.take().map(|saved| saved.count);
+        let saved_stage = self.saved.take();
         window.remove_window();
         cx.defer(move |cx| {
             let result = match &from_first_run {
-                None => finish(&model, saved_count, cx),
-                Some(from) => finish_for_first_run(&model, from.rules.clone(), saved_count, cx),
+                None => finish(&model, saved_stage.clone(), cx),
+                Some(from) => {
+                    finish_for_first_run(&model, from.rules.clone(), saved_stage.clone(), cx)
+                }
             };
             match result {
                 Ok(saved) if saved.source_error.is_some() => {
@@ -446,13 +531,13 @@ impl Importer {
                 }
                 Ok(saved) => {
                     if let Some(from) = from_first_run {
-                        from.session.0.borrow_mut().take();
+                        *from.session.0.borrow_mut() = Some((model.clone(), saved.clone()));
                         (from.on_done)(saved.outcome(), cx);
                     }
                 }
                 Err(reason) => {
                     model.refused = Some(reason);
-                    show(model, from_first_run, cx);
+                    show_attempt(model, from_first_run, saved_stage, cx);
                 }
             }
         });
@@ -506,7 +591,7 @@ fn prompt_for(from_first_run: Option<FromFirstRun>, cx: &mut App) {
 /// refused write comes back as the reason.
 fn finish(
     model: &ImportModel,
-    saved_count: Option<usize>,
+    saved: Option<SavedImport>,
     cx: &mut App,
 ) -> Result<SavedImport, String> {
     if main_window(cx).is_none()
@@ -515,67 +600,98 @@ fn finish(
         (host.show_rules)(cx);
     }
     let main = main_window(cx).ok_or("No PwrRoute window to import into.")?;
-    let count = match saved_count {
-        Some(count) => count,
+    let saved = match saved {
+        Some(saved) => {
+            saved.validate(cx)?;
+            saved
+        }
         None => {
             let previous_source =
                 settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
             main.update(cx, |app, window, cx| {
                 app.navigate(Screen::Rules, window, cx);
                 app.apply_import(model, previous_source, cx)?;
-                Ok::<_, String>(app.last_import.as_ref().map_or(0, |done| done.count))
+                let done = app
+                    .last_import
+                    .as_ref()
+                    .ok_or("Import did not save its result.")?;
+                Ok::<_, String>(SavedImport {
+                    count: done.count,
+                    rules: done.saved_rules.clone(),
+                    source: None,
+                    keeps_config: model.final_source() == SourceChoice::KeepConfig,
+                    source_error: None,
+                })
             })
             .map_err(|error| format!("{error:#}"))??
         }
     };
-    Ok(finish_source(model, count, cx))
+    Ok(finish_source(model, saved, cx))
 }
 
-/// First run's Import: writes the import through the main window's store
-/// when that window is open, else straight to `rules` through a store of
-/// its own, without opening the main window, then switches the source as
-/// Choose source said. Returns the rules written; a refused write comes
-/// back as the reason.
+/// First run writes through the open main window, or a private store of
+/// its own. A saved stage must still match its committed rules and source.
 fn finish_for_first_run(
     model: &ImportModel,
     rules: Option<PathBuf>,
-    saved_count: Option<usize>,
+    saved: Option<SavedImport>,
     cx: &mut App,
 ) -> Result<SavedImport, String> {
-    let count = match (saved_count, main_window(cx)) {
-        (Some(count), _) => count,
-        (None, Some(main)) => {
-            let previous_source =
-                settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
-            main.update(cx, |app, _, cx| {
+    if let Some(saved) = saved {
+        saved.validate(cx)?;
+        return Ok(finish_source(model, saved, cx));
+    }
+    if let Some(main) = main_window(cx) {
+        let previous_source =
+            settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+        let saved = main
+            .update(cx, |app, _, cx| {
                 app.apply_import(model, previous_source, cx)?;
-                Ok::<usize, String>(app.last_import.as_ref().map_or(0, |done| done.count))
+                let done = app
+                    .last_import
+                    .as_ref()
+                    .ok_or("Import did not save its result.")?;
+                Ok::<_, String>(SavedImport {
+                    count: done.count,
+                    rules: done.saved_rules.clone(),
+                    source: None,
+                    keeps_config: model.final_source() == SourceChoice::KeepConfig,
+                    source_error: None,
+                })
             })
-            .map_err(|error| format!("{error:#}"))??
-        }
-        (None, None) => {
-            let mut store = RulesStore::load(rules);
-            if let Some(reason) = store.save_refused() {
-                return Err(reason);
-            }
-            model.validate_target(store.path(), &store.written())?;
-            let plan = model.plan(&store.written());
-            store.replace_all(plan.file.clone());
-            store.save()?;
-            plan.count()
-        }
+            .map_err(|error| format!("{error:#}"))??;
+        return Ok(finish_source(model, saved, cx));
+    }
+    let mut store = RulesStore::load(rules);
+    if let Some(reason) = store.save_refused() {
+        return Err(reason);
+    }
+    model.validate_target(store.path(), &store.written())?;
+    let plan = model.plan(&store.written());
+    store.replace_all(plan.file.clone());
+    store.save()?;
+    let saved = SavedImport {
+        count: plan.count(),
+        rules: SavedRules::new(store.path(), plan.file),
+        source: None,
+        keeps_config: model.final_source() == SourceChoice::KeepConfig,
+        source_error: None,
     };
-    Ok(finish_source(model, count, cx))
+    Ok(finish_source(model, saved, cx))
 }
 
-fn finish_source(model: &ImportModel, count: usize, cx: &mut App) -> SavedImport {
+fn finish_source(model: &ImportModel, mut saved: SavedImport, cx: &mut App) -> SavedImport {
     let result = switch_source(model, cx);
-    let source_error = result.err().map(|reason| format!(
+    saved.source = settings_store::store(cx).map(|store| store.read(cx).settings().source.clone());
+    saved.source_error = result.err().map(|reason| format!(
         "{} saved to rules.json. {reason} Retry saving the source; the rules will not be imported again.",
-        plural(count, "rule")
+        plural(saved.count, "rule")
     ));
+    if cx.has_global::<SourceNotice>() {
+        cx.global_mut::<SourceNotice>().rules = Some(saved.rules.clone());
+    }
     if let Some(main) = main_window(cx) {
-        let problem = source_error.clone();
+        let problem = saved.source_error.clone();
         let _ = main.update(cx, |app, _, cx| {
             if let Some(done) = &mut app.last_import {
                 done.problem = problem;
@@ -583,11 +699,7 @@ fn finish_source(model: &ImportModel, count: usize, cx: &mut App) -> SavedImport
             cx.notify();
         });
     }
-    SavedImport {
-        count,
-        keeps_config: model.final_source() == SourceChoice::KeepConfig,
-        source_error,
-    }
+    saved
 }
 
 /// The source stage always attempts persistence, even when runtime settings
@@ -601,16 +713,82 @@ fn switch_source(model: &ImportModel, cx: &mut App) -> Result<(), String> {
         return Err("No settings store: the source choice was not saved.".to_owned());
     };
     let current = store.read(cx).settings().source.clone();
-    set_source_and_show(model.source_after(&current), cx)
+    if model.final_source() == SourceChoice::KeepConfig {
+        // Keep owns no routing transition. In particular, --config may
+        // differ from settings.json; persisting must not replace it.
+        return persist_source(current, false, cx);
+    }
+    let wanted = model.source_after(&current);
+    if model.stops_config() {
+        set_source_and_show(wanted, cx)
+    } else {
+        persist_source(wanted, false, cx)
+    }
 }
 
 #[derive(Clone)]
 struct SourceNotice {
     source: SourceSettings,
     reason: String,
+    apply: bool,
+    rules: Option<SavedRules>,
 }
 
 impl Global for SourceNotice {}
+
+impl SourceNotice {
+    fn retry(&self, app: &mut PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Result<(), String> {
+        let result = (|| {
+            if let Some(rules) = &self.rules {
+                rules.check()?;
+            }
+            if self.apply {
+                let applied = set_source(self.source.clone(), cx);
+                app.set_config(applied.config, cx);
+                applied.saved
+            } else {
+                persist_source(self.source.clone(), false, cx)
+            }
+        })();
+        if cx.has_global::<SourceNotice>() {
+            let notice = cx.global_mut::<SourceNotice>();
+            notice.rules.clone_from(&self.rules);
+            if let Err(reason) = &result {
+                notice.reason.clone_from(reason);
+            }
+        }
+        result
+    }
+}
+
+/// Persist metadata or a pending answer without recomputing routing from
+/// settings; a command-line override is deliberately outside that file.
+fn persist_source(source: SourceSettings, apply: bool, cx: &mut App) -> Result<(), String> {
+    let saved = match settings_store::store(cx) {
+        Some(store) => store.update(cx, |store, _| {
+            if !apply && store.settings().source != source {
+                return Err("The source choice changed. Review it again before saving.".to_owned());
+            }
+            store.update(|settings| settings.source = source.clone())
+                .map_err(|error| format!("Source is used for this session only: {error:#}. The previous source may return after restart."))
+        }),
+        None => Err("No settings store: the source choice was not saved.".to_owned()),
+    };
+    match &saved {
+        Ok(()) => {
+            if cx.has_global::<SourceNotice>() {
+                cx.remove_global::<SourceNotice>();
+            }
+        }
+        Err(reason) => cx.set_global(SourceNotice {
+            source,
+            reason: reason.clone(),
+            apply,
+            rules: None,
+        }),
+    }
+    saved
+}
 
 /// The source applied to this session, together with its persistence result.
 /// SettingsStore deliberately retains edits on failure; callers must show
@@ -624,13 +802,7 @@ pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> SourceApplied 
     let choice = source.choice(discovery::config_candidates(
         &discovery::Environment::current(),
     ));
-    let saved = match settings_store::store(cx) {
-        Some(store) => store.update(cx, |store, _| {
-            store.update(|settings| settings.source = source.clone())
-                .map_err(|error| format!("Source is used for this session only: {error:#}. The previous source may return after restart."))
-        }),
-        None => Err("No settings store: the source choice was not saved.".to_owned()),
-    };
+    let saved = persist_source(source, true, cx);
     let config = match &choice {
         ConfigChoice::None => None,
         ConfigChoice::Path(path) => Some(path.canonicalize().unwrap_or_else(|_| path.clone())),
@@ -640,17 +812,6 @@ pub(crate) fn set_source(source: SourceSettings, cx: &mut App) -> SourceApplied 
     // process-wide routing state on its behalf.
     if let Some(router) = settings_store::router(cx) {
         crate::router::choose_source(choice, Some(&router));
-    }
-    match &saved {
-        Ok(()) => {
-            if cx.has_global::<SourceNotice>() {
-                cx.remove_global::<SourceNotice>();
-            }
-        }
-        Err(reason) => cx.set_global(SourceNotice {
-            source,
-            reason: reason.clone(),
-        }),
     }
     SourceApplied { config, saved }
 }
@@ -788,8 +949,8 @@ pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div>
                     small_button(SOURCE_RETRY_ID, "Retry saving source", false)
                         .map(crate::accessibility::clickable)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                            let applied = set_source(notice.source.clone(), cx);
-                            this.set_config(applied.config, cx);
+                            let _ = notice.retry(this, cx);
+                            cx.notify();
                         })),
                 ),
         );
@@ -817,10 +978,9 @@ pub fn rules_banners(app: &PwrRoute, cx: &mut Context<'_, PwrRoute>) -> Vec<Div>
                 row.child(small_button(SOURCE_RETRY_ID, "Retry saving source", false)
                     .map(crate::accessibility::clickable)
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        let applied = set_source(notice.source.clone(), cx);
-                        this.set_config(applied.config, cx);
+                        let result = notice.retry(this, cx);
                         if let Some(done) = &mut this.last_import {
-                            done.problem = applied.saved.err();
+                            done.problem = result.err();
                         }
                         cx.notify();
                     })))
@@ -2153,6 +2313,7 @@ fn footer(model: &ImportModel, saved: Option<&SavedImport>, cx: &mut Context<'_,
     };
     let first = model.step == Step::Review || saved.is_some();
     let can_go = model.problem.is_none()
+        && saved.is_none_or(|saved| saved.rules.retry_valid.get())
         && (saved.is_some()
             || model.next_step().is_some()
             || plan.count() > 0

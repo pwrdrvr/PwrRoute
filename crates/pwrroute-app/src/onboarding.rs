@@ -615,7 +615,20 @@ pub fn hooks_with(
             ImportChoice::Import => {
                 let retry = pending_import.borrow().clone();
                 if let Some(done) = retry {
-                    let outcome = record_import(import_dir.as_deref(), done, &pending_import);
+                    let outcome = match import_session.revalidate_completed(cx) {
+                        Ok(()) => record_import(import_dir.as_deref(), done, &pending_import),
+                        Err(reason) => {
+                            pending_import.borrow_mut().take();
+                            import_session.clear();
+                            ImportOutcome::Failed {
+                                imported: None,
+                                reason,
+                            }
+                        }
+                    };
+                    if matches!(outcome, ImportOutcome::Imported(_)) {
+                        import_session.clear();
+                    }
                     cx.defer(move |cx| reply(outcome, cx));
                     return;
                 }
@@ -627,6 +640,7 @@ pub fn hooks_with(
                 let dir = import_dir.clone();
                 let rules = rules_path.clone();
                 let pending = pending_import.clone();
+                let completion_session = import_session.clone();
                 let on_done: crate::importer_view::OnDone = Rc::new(move |outcome, cx| {
                     let outcome = match outcome {
                         crate::importer_view::ImportOutcome::Cancelled => ImportOutcome::Cancelled,
@@ -645,6 +659,9 @@ pub fn hooks_with(
                             }
                         }
                     };
+                    if matches!(outcome, ImportOutcome::Imported(_)) {
+                        completion_session.clear();
+                    }
                     reply(outcome, cx);
                 });
                 let rules = rules_path.clone();
@@ -1152,33 +1169,67 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn review_cached_import_cannot_complete_after_a_competing_source_choice(cx: &mut TestAppContext) {
+    fn review_cached_import_cannot_complete_after_a_competing_source_choice(
+        cx: &mut TestAppContext,
+    ) {
         cx.update(|cx| crate::assets::load_fonts(cx));
         let dir = tempfile::tempdir().unwrap();
         let rules = dir.path().join("rules.json");
-        let mut settings = crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
-        settings.update(|settings| settings.source.config = Some(importer_config())).unwrap();
+        let mut settings =
+            crate::settings_store::SettingsStore::load(Some(dir.path().to_path_buf()));
+        settings
+            .update(|settings| settings.source.config = Some(importer_config()))
+            .unwrap();
         cx.update(|cx| crate::settings_store::install(settings, None, cx));
         fs::create_dir(dir.path().join("state.json.saving")).unwrap();
-        let hooks = hooks_with(Some(dir.path().to_path_buf()), Some(rules.clone()), Some(importer_config()), Rc::new(crate::importer_view::set_source_and_show), Rc::new(|_, _| {}));
+        let hooks = hooks_with(
+            Some(dir.path().to_path_buf()),
+            Some(rules.clone()),
+            Some(importer_config()),
+            Rc::new(crate::importer_view::set_source_and_show),
+            Rc::new(|_, _| {}),
+        );
         let replies = Rc::new(RefCell::new(Vec::new()));
         let choose = |choice, cx: &mut TestAppContext| {
             let heard = replies.clone();
-            cx.update(|cx| (hooks.on_import)(choice, Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)), cx));
+            cx.update(|cx| {
+                (hooks.on_import)(
+                    choice,
+                    Rc::new(move |outcome, _| heard.borrow_mut().push(outcome)),
+                    cx,
+                )
+            });
         };
         choose(ImportChoice::Import, cx);
         let window = importer_window(cx).unwrap();
-        window.update(cx, |view, _, _| view.model.source = crate::importer::SourceChoice::VisualOnly).unwrap();
+        window
+            .update(cx, |view, _, _| {
+                view.model.source = crate::importer::SourceChoice::VisualOnly
+            })
+            .unwrap();
         let mut importer = VisualTestContext::from_window(window.into(), cx);
         press(&mut importer, crate::importer_view::NEXT_ID);
-        assert!(crate::settings_store::Settings::load(dir.path()).unwrap().source.visual_only);
+        assert!(
+            crate::settings_store::Settings::load(dir.path())
+                .unwrap()
+                .source
+                .visual_only
+        );
         let written = fs::read(&rules).unwrap();
         choose(ImportChoice::KeepFile, cx);
-        assert!(!crate::settings_store::Settings::load(dir.path()).unwrap().source.visual_only);
+        assert!(
+            !crate::settings_store::Settings::load(dir.path())
+                .unwrap()
+                .source
+                .visual_only
+        );
         fs::remove_dir(dir.path().join("state.json.saving")).unwrap();
         choose(ImportChoice::Import, cx);
-        assert!(matches!(replies.borrow().last(), Some(ImportOutcome::Failed { .. })),
-            "cached visual-only completion must be rejected after Keep changed the source: {:?}", replies.borrow());
+        assert!(
+            matches!(replies.borrow().last(), Some(ImportOutcome::Failed { .. })),
+            "cached visual-only completion must be rejected after Keep changed the source: {:?}",
+            replies.borrow()
+        );
         assert_eq!(State::load(dir.path()).unwrap().import, None);
         assert_eq!(fs::read(&rules).unwrap(), written);
     }

@@ -730,6 +730,7 @@ impl PwrRoute {
             at: std::time::SystemTime::now(),
             previous,
             previous_source,
+            saved_rules: crate::importer_view::SavedRules::new(self.store.path(), plan.file),
             undoable: true,
             rules_restored: false,
             problem: None,
@@ -768,6 +769,7 @@ impl PwrRoute {
             self.reloaded(cx);
             if let Some(done) = &mut self.last_import {
                 done.rules_restored = true;
+                done.saved_rules.invalidate();
             }
         }
         Ok(done.previous_source)
