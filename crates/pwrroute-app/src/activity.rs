@@ -340,14 +340,21 @@ impl Feed {
     /// A dispatch just landed.
     pub fn push(&mut self, record: DispatchRecord) {
         let day = local_day(record.received_at);
-        if self.day != Some(day) {
+        // Delivery follows I/O completion, so an older local day can arrive
+        // after today's tally. Advance the counted day, never rewind it.
+        if self.day.is_none_or(|current| day > current) {
             self.day = Some(day);
             self.counts = Counts::default();
             self.tally = Tally::default();
         }
-        self.counts.count(&record);
-        self.tally.count(&record);
-        self.records.insert(0, record);
+        if self.day == Some(day) {
+            self.counts.count(&record);
+            self.tally.count(&record);
+        }
+        let index = self.records.partition_point(|other| {
+            (other.received_at, other.id) > (record.received_at, record.id)
+        });
+        self.records.insert(index, record);
         let capacity = self.capacity();
         self.records.truncate(capacity);
     }
@@ -3356,9 +3363,128 @@ mod tests {
         );
     }
 
+    fn feed_completion(id: u64, at: SystemTime, privacy: Privacy) -> DispatchRecord {
+        let url = "https://completion.example/fixture";
+        let mut completion = record(
+            id,
+            url,
+            None,
+            vec![
+                Step::Matched {
+                    by: Matched::Rule { index: id as usize },
+                },
+                Step::Browser {
+                    browser: browser("Firefox", "Fixture", url),
+                },
+                Step::Launched { dry_run: false },
+            ],
+        );
+        completion.received_at = at;
+        completion.reduce(privacy);
+        completion
+    }
+
+    #[test]
+    fn feed_out_of_order_completion_keeps_the_newer_receipt_at_capacity_one() {
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        let mut feed = Feed::new(None);
+        feed.capacity = 1;
+        feed.push(feed_completion(2, at, Privacy::Full));
+        feed.push(feed_completion(
+            1,
+            at - Duration::from_secs(1),
+            Privacy::Host,
+        ));
+        assert_eq!(
+            feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            [2]
+        );
+        assert_eq!(
+            feed.today(at).routed,
+            2,
+            "retention does not discard today's counts"
+        );
+    }
+
+    #[test]
+    fn feed_equal_receipt_timestamp_uses_dispatch_id_including_counted_only_records() {
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        let mut feed = Feed::new(None);
+        feed.capacity = 1;
+        feed.push(feed_completion(2, at, Privacy::None));
+        feed.push(feed_completion(1, at, Privacy::Full));
+        assert_eq!(
+            feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            [2]
+        );
+        assert_eq!(feed.records()[0].privacy, Privacy::None);
+        assert!(feed.records()[0].steps.is_empty());
+        assert!(feed.records()[0].browser.is_none());
+        assert_eq!(feed.today(at).routed, 2);
+        assert_eq!(feed.today(at).private, 1);
+        assert_eq!(feed.tally(at).rule(HitKey::Rule(2)), 0);
+    }
+
+    #[test]
+    fn feed_late_previous_day_completion_preserves_today_counts_tally_and_order() {
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
+        let earlier_day = at - Duration::from_secs(86_400);
+        assert!(local_day(earlier_day) < local_day(at));
+        let mut feed = Feed::new(None);
+        feed.capacity = 2;
+        feed.push(feed_completion(3, at, Privacy::Full));
+        let counts = feed.today(at);
+        let tally = feed.tally(at);
+        feed.push(feed_completion(2, earlier_day, Privacy::Host));
+        assert_eq!(feed.day, Some(local_day(at)));
+        assert_eq!(feed.today(at), counts);
+        assert_eq!(feed.tally(at), tally);
+        assert_eq!(
+            feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            [3, 2]
+        );
+        feed.push(feed_completion(
+            4,
+            at + Duration::from_secs(1),
+            Privacy::None,
+        ));
+        assert_eq!(feed.today(at).routed, 2);
+        assert_eq!(feed.today(at).private, 1);
+        assert_eq!(feed.tally(at).rule(HitKey::Rule(3)), 1);
+        assert_eq!(feed.tally(at).rule(HitKey::Rule(4)), 0);
+        assert_eq!(feed.tally(at).rule(HitKey::Rule(2)), 0);
+        assert_eq!(
+            feed.records().iter().map(|r| r.id.0).collect::<Vec<_>>(),
+            [4, 3]
+        );
+        assert_eq!(feed.records()[0].privacy, Privacy::None);
+        assert_eq!(
+            feed.records()
+                .iter()
+                .filter(|r| r.privacy != Privacy::None)
+                .count(),
+            1,
+            "counted-only records still use buffer capacity"
+        );
+        feed.clear();
+        assert_eq!(feed.today(at).routed, 2);
+        assert_eq!(feed.tally(at).rule(HitKey::Rule(3)), 1);
+        feed.capacity = 0;
+        feed.push(feed_completion(
+            5,
+            at + Duration::from_secs(2),
+            Privacy::Host,
+        ));
+        assert!(feed.records().is_empty());
+        assert_eq!(feed.today(at).routed, 3);
+        assert_eq!(feed.today(at).private, 2);
+        assert_eq!(feed.tally(at).rule(HitKey::Rule(5)), 1);
+    }
+
     #[test]
     fn the_feed_counts_today_and_keeps_the_newest() {
         let url = "https://a.example/";
+        let received = SystemTime::now();
         let step = |id: u64, failed: bool| {
             let mut steps = vec![
                 Step::Received { url: url.into() },
@@ -3376,7 +3502,9 @@ mod tests {
             } else {
                 Step::Launched { dry_run: false }
             });
-            record(id, url, None, steps)
+            let mut record = record(id, url, None, steps);
+            record.received_at = received + Duration::from_nanos(id);
+            record
         };
         let mut feed = Feed::from_records(vec![step(3, true), step(2, false), step(1, false)]);
         let now = SystemTime::now();

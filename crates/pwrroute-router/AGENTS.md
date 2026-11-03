@@ -6,7 +6,22 @@ runs on every platform.
 
 - **One dispatch thread owns the resolver.** The engine (QuickJS) is not
   `Send`; `Router::spawn` builds it on the thread from a `ResolverFactory`.
-  Everything else talks through `RouterHandle`.
+  Everything else talks through `RouterHandle`. Expansion and launch use bounded
+  I/O lanes; no resolver or raw record leaves its owning thread.
+- **Admission is backpressure, not a busy error.** At most 64 links are
+  admitted, through record delivery; a full budget blocks OS/IPC/API/release
+  submitters before acceptance. The command mailbox holds at most 128 messages.
+  Status/control bypass the link budget. Refresh coalesces through a dirty bit
+  when the mailbox is full, so replacing a resolver can join its watcher.
+  Shutdown closes admission, wakes
+  blocked submitters with `RouterGone`, drains accepted records and joins lanes.
+  Never turn transient saturation into `RouterGone` or discard an OS click.
+- **Ordering is explicit.** Four expansion lanes let ordinary links pass a
+  slow shortener. Up to four launch lanes serialize ready attempts by canonical
+  browser, across profiles and fallback attempts; they do not preserve global
+  receipt order across unresolved short links. `Launcher::fork` opts into
+  parallel browser lanes; its default keeps launch attempts serial. The buffer
+  still sorts and retains records by receipt time, not completion order.
 - **`Launcher` is the seam to pwrroute-browsers.** Keep it small. Tests use
   `DryRunLauncher`; nothing in this crate opens a browser.
   `launch_observed` optionally reports fixed labels, counts and timings
@@ -15,7 +30,7 @@ runs on every platform.
   are. These messages must carry no URL, command argument, browser/profile
   name or arbitrary error text, even for a counted-only link. A boxed
   launcher must forward the observer.
-- **A link is never dropped for want of a browser.** `Worker::launch` tries
+- **A link is never dropped for want of a browser.** The launch scheduler tries
   the fallback browser once when the chosen browser fails to open, traced
   as `LaunchFailed`, `Fallback`, `Launched`, keeping the chosen browser's
   `private`; the record's `browser` is the one that opened the link.
@@ -63,21 +78,25 @@ runs on every platform.
   `dispatch/tests.rs` proves the path with a `rules.json`-only engine and
   the `DryRunLauncher`; keep those tests when the seam changes.
 - **Pause is a dispatch-time swap, not a resolver.**
-  `RouterHandle::set_paused(Some(PauseTarget))` is read once per link in
-  `Worker::process`, after `resolve`: the rules have run, so the rewrites,
+  `RouterHandle::set_paused(Some(PauseTarget))` is reserved once on owner
+  admission, after normalization and before expansion (not at OS receipt or
+  before admission backpressure). The reservation is applied after resolve:
+  the rewrites,
   the rule steps and the record's privacy level stand; `Step::Paused {
   skipped }` names the config handler that matched (a `rules.json` rule
   passed over is the record's `Matched::Rule`, with `skipped: None`), and
   the target replaces the browser, a `browser: null` or `private` handler
   included.
-  Test a link ignores the pause. Keep it out of `launch` and `fallback()`.
+  Test a link ignores the pause. Mode changes and timer expiry during
+  expansion do not change an admitted reservation; an already expired scope
+  takes nothing. Keep overrides out of launch and fallback.
 - **Send links shares the pause's slot.** `RouterHandle::set_send_to(Some(
   SendTo))` sends links to a user's `Destination` (browser, profile,
   private) for `SendScope::Next { left, of }` or `All { until }`, applied
   where a pause is and traced as `Step::Sent { sent, skipped }`. One
   `Override` slot holds a pause, a send or a hold: setting one ends the
-  others, and clearing one (`None`) leaves the others alone. A `Next` is counted in
-  `Worker::take_override`, under the slot's lock, once per dispatched link
+  others, and clearing one (`None`) leaves the others alone. A `Next` is counted on owner admission
+  in `Worker::take_override`, under the slot's lock, once per dispatched link
   (forwarded and agent links included, a rejected link or a test not),
   and the slot clears when it reaches zero; an `All` past `until` clears
   without taking the link, and `send_to()` never returns one. A private
@@ -109,25 +128,30 @@ runs on every platform.
   `None`, a private rule) passes by and the catch stays armed: a `None`
   record keeps nothing waiting, so the link would be lost.
   `DispatchRecord::held_for_rule()` reads it from the steps; the app opens
-  Add a rule for it. Memory only.
+  Add a rule for it. While privacy is pending, following state decisions
+  commit in admission order using the live mode: a cancellation or mode change
+  before that commit governs the deferred chain. Memory only.
 - **A link that was not opened waits, in memory, to be opened.**
   `Worker::record` hands `RecentDispatches::push_waiting` the whole link
   (URL and opener) of every `NotOpened` record that keeps anything; it
   waits beside its record and leaves with it (count, age, Clear, a
-  retention of nothing), so nothing waits that Activity cannot show. This
-  is the one exception to "a `Host` record never held the full URL outside
-  the dispatch thread": its whole link stays in the buffer's memory, never
-  on disk, so Open can open it. A `None` record keeps nothing waiting.
+  retention of nothing), so nothing waits that Activity cannot show. Its whole
+  link stays in the buffer's memory, never on disk, so Open can open it. Raw
+  launch URLs also live temporarily in their I/O lane; raw records and opener
+  data stay on the owner. A `None` record keeps nothing waiting.
   `RouterHandle::open_not_opened(id, OpenAs)` takes it on the dispatch
   thread and dispatches it again past any override, with its source and
   opener and `Step::Released { from, chosen }`: `OpenAs::Rules` (the
   fallback, with `Step::Fallback`, when the rules still open nothing) or
   `OpenAs::In(Destination)`. `pending()` lists what still waits.
-- **Short links expand on the dispatch thread, before the resolver.**
-  `Worker::expand` reads `Resolver::short_links()` (the engine's list, as
-  the config in charge set it), then follows a short link through
-  `ShortLinks::expand` with `Options::network` (`HttpNetwork` built on the
-  thread the first time it is needed; tests pass a fake). That request to
+- **Short links expand off the resolver thread.** The owner refreshes and
+  reads `Resolver::short_links()`, then a fixed I/O lane follows the link
+  through `ShortLinks::expand` with `Options::network` (`HttpNetwork` built
+  lazily on an I/O lane; tests pass a fake). Policy invalidation cancels
+  subsequent redirects/GET; the in-flight request keeps its existing deadline.
+  Before resolve the owner refreshes again and discards expansion if its policy
+  changed or was cancelled. Rules always use the current refreshed config.
+  That request to
   the shortener's host is the only place a link leaves the machine before
   a rule sees it, as under Finicky. The resolver then gets the expanded
   `pwrroute_engine::Link`, so a config still sees `originalUrl`, and the
@@ -145,7 +169,15 @@ runs on every platform.
   `rules.json`'s `precedence` ran them in (`dispatch::rule_steps`).
 - **IPC:** one JSON line each way per connection (`ipc.rs`). Bump
   `PROTOCOL_VERSION` on any incompatible change; a mismatched launch routes
-  its own links rather than lose them.
+  its own links rather than lose them. Protocol v2 refuses legacy clients
+  before dispatch: their fixed reply deadline cannot honor blocking admission.
+  Connected `Open` requests wait through
+  admission backpressure without a reply deadline; connection retry and
+  Ping/Activate still time out. A stuck connected primary can keep an Open
+  caller waiting. An error response retains the accepted dispatch-id prefix,
+  even for normalization-rejected links; startup falls back only for the
+  unaccepted suffix. Transport failure after possible acceptance remains
+  ambiguous; never retry an explicitly accepted prefix.
 - **Single instance:** the file lock decides who is primary, never the
   socket. Tests use their own temp endpoint; never the real `router_dir()`.
 - `tests/forwarding.rs` re-runs its own test binary as the second process.

@@ -14,7 +14,7 @@
 
 use std::{
     fs,
-    io::{self, Write},
+    io::{self, BufRead, Write},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -121,14 +121,21 @@ pub fn read_recent(dir: &Path, limit: usize) -> io::Result<Vec<DispatchRecord>> 
     let mut files = journal_files(dir)?;
     files.sort_unstable_by_key(|(day, _)| std::cmp::Reverse(*day));
     for (_, path) in files {
-        let text = fs::read_to_string(&path)?;
-        for line in text.lines().rev() {
-            if let Ok(record) = serde_json::from_str::<DispatchRecord>(line) {
-                records.push(record);
-                if records.len() == limit {
-                    return Ok(records);
+        // Slow I/O can append an older receipt after a newer one. Scan
+        // this day in bounded memory, retaining only its newest `limit`.
+        for line in io::BufReader::new(fs::File::open(path)?).lines() {
+            if let Ok(record) = serde_json::from_str::<DispatchRecord>(&line?) {
+                let index = records.partition_point(|other: &DispatchRecord| {
+                    (other.received_at, other.id) > (record.received_at, record.id)
+                });
+                if index < limit {
+                    records.insert(index, record);
+                    records.truncate(limit);
                 }
             }
+        }
+        if records.len() == limit {
+            return Ok(records);
         }
     }
     Ok(records)
@@ -156,6 +163,8 @@ fn journal_files(dir: &Path) -> io::Result<Vec<(Day, PathBuf)>> {
 pub(crate) struct Journal {
     config: JournalConfig,
     open: Option<(Day, fs::File)>,
+    latest_day: Option<Day>,
+    latest_day_seeded: bool,
     /// The last write failure, reported once; cleared by the next success.
     error: Option<String>,
     /// The last pruning failure, reported once. Pruning is best effort:
@@ -168,6 +177,8 @@ impl Journal {
         Self {
             config,
             open: None,
+            latest_day: None,
+            latest_day_seeded: false,
             error: None,
             prune_error: None,
         }
@@ -198,10 +209,28 @@ impl Journal {
     }
 
     fn try_append(&mut self, record: &DispatchRecord) -> io::Result<()> {
+        if !self.latest_day_seeded {
+            // SetJournal can replace the writer while older accepted links
+            // are still in flight. Seed from filenames, never URL contents;
+            // a listing error must fail this append rather than lose the
+            // existing watermark and recreate an expired receipt day.
+            self.latest_day = journal_files(&self.config.dir)?
+                .into_iter()
+                .map(|(day, _)| day)
+                .max();
+            self.latest_day_seeded = true;
+        }
+        let day = Day::from(record.received_at);
+        let latest = self.latest_day.map_or(day, |latest| latest.max(day));
+        self.latest_day = Some(latest);
+        // A late completion must not recreate a day a newer receipt pruned.
+        if day < latest.minus_days(self.config.days.max(1) - 1) {
+            return Ok(());
+        }
         let mut line = serde_json::to_string(&journal_entry(record, self.config.mode))
             .map_err(io::Error::other)?;
         line.push('\n');
-        let file = self.file_for(Day::from(record.received_at))?;
+        let file = self.file_for(day)?;
         file.write_all(line.as_bytes())
     }
 
@@ -211,7 +240,7 @@ impl Journal {
             create_private_dir(&self.config.dir)?;
             let file = open_private(&self.config.dir.join(day.file_name()))?;
             self.open = Some((day, file));
-            if let Err(e) = self.prune(day) {
+            if let Err(e) = self.prune(self.latest_day.unwrap_or(day)) {
                 let message = format!(
                     "old files in the activity journal in {} cannot be deleted: {e}",
                     self.config.dir.display()
@@ -508,6 +537,100 @@ mod tests {
             }
         }
         record
+    }
+
+    #[test]
+    fn recreated_writer_seeds_receipt_watermark_before_a_late_completion() {
+        for days in [1, 2] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = JournalConfig {
+                days: 1,
+                ..JournalConfig::new(dir.path(), JournalMode::Full)
+            };
+            let old_day = NOON - 3 * 86_400;
+            let mut journal = Journal::new(config.clone());
+            journal.append(&record(1, at(old_day), Privacy::Full));
+            journal.append(&record(3, at(NOON), Privacy::Full));
+            let old_path = dir.path().join(Day::from(at(old_day)).file_name());
+            assert!(!old_path.exists());
+            drop(journal);
+            let mut recreated = Journal::new(JournalConfig {
+                days,
+                ..config.clone()
+            });
+            recreated.append(&record(2, at(old_day + 1), Privacy::Full));
+            assert_eq!(recreated.error(), None);
+            assert!(
+                !old_path.exists(),
+                "recreating with days={days} resurrected an expired day"
+            );
+            assert_eq!(
+                config
+                    .read(10)
+                    .unwrap()
+                    .iter()
+                    .map(|r| r.id.0)
+                    .collect::<Vec<_>>(),
+                [3]
+            );
+        }
+    }
+
+    #[test]
+    fn late_completion_does_not_recreate_a_pruned_receipt_day() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = JournalConfig {
+            days: 1,
+            ..JournalConfig::new(dir.path(), JournalMode::Full)
+        };
+        let mut journal = Journal::new(config.clone());
+        journal.append(&record(1, at(NOON - 86_400), Privacy::Full));
+        journal.append(&record(3, at(NOON), Privacy::Full));
+        journal.append(&record(2, at(NOON - 86_400 + 1), Privacy::Full));
+        assert_eq!(journal.error(), None);
+        assert!(
+            !dir.path()
+                .join(Day::from(at(NOON - 86_400)).file_name())
+                .exists()
+        );
+        assert_eq!(
+            config
+                .read(10)
+                .unwrap()
+                .iter()
+                .map(|r| r.id.0)
+                .collect::<Vec<_>>(),
+            [3]
+        );
+    }
+
+    #[test]
+    fn newest_receipts_survive_late_appends_ties_and_multiple_days() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = JournalConfig::new(dir.path(), JournalMode::Full);
+        let mut journal = Journal::new(config.clone());
+        for (id, when) in [
+            (10, NOON + 2),
+            (9, NOON + 1),
+            (1, NOON - 86_400),
+            (8, NOON + 1),
+            (7, NOON - 2),
+            (6, NOON - 86_400 + 1),
+        ] {
+            journal.append(&record(id, at(when), Privacy::Full));
+        }
+        assert_eq!(journal.error(), None);
+        let ids = |limit| {
+            config
+                .read(limit)
+                .unwrap()
+                .iter()
+                .map(|r| r.id.0)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(2), [10, 9]);
+        assert_eq!(ids(3), [10, 9, 8]);
+        assert_eq!(ids(10), [10, 9, 8, 7, 6, 1]);
     }
 
     #[test]

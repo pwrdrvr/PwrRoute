@@ -12,7 +12,9 @@ use crate::{link::Link, trace::DispatchId};
 
 /// Bumped on any incompatible change. A router refuses other versions, and
 /// the launch that asked then routes its links itself.
-pub const PROTOCOL_VERSION: u32 = 1;
+// v2 requires Open callers to wait through admission backpressure. A v1
+// client would time out and route locally while the primary still owns it.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The largest message either side accepts: room for a few long links.
 pub const MAX_MESSAGE: u64 = 1024 * 1024;
@@ -36,7 +38,9 @@ pub struct Response {
     pub ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// The dispatch ids an `Open` queued, in order.
+    /// The dispatch ids an `Open` queued, in order, including a prefix
+    /// accepted before shutdown made the rest fail. Rejected normalization
+    /// is still an accepted dispatch; callers must not retry these links.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dispatched: Vec<DispatchId>,
     /// The router's process id.
@@ -165,21 +169,23 @@ mod tests {
     fn the_wire_format_is_one_json_line() {
         let mut wire = Vec::new();
         write_message(&mut wire, &Request::Ping).unwrap();
-        assert_eq!(wire, b"{\"v\":1,\"op\":\"ping\"}\n");
+        assert_eq!(wire, b"{\"v\":2,\"op\":\"ping\"}\n");
     }
 
     #[test]
     fn other_protocol_versions_are_refused() {
-        let mut reader = Cursor::new(b"{\"v\":99,\"op\":\"ping\"}\n".to_vec());
-        let err = read_message::<Request>(&mut reader).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-        assert!(err.to_string().contains("99"));
+        for version in [1, 99] {
+            let mut reader = Cursor::new(format!("{{\"v\":{version},\"op\":\"ping\"}}\n"));
+            let err = read_message::<Request>(&mut reader).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+            assert!(err.to_string().contains(&version.to_string()));
+        }
     }
 
     #[test]
     fn a_message_of_exactly_the_limit_is_read() {
         let (head, tail) = (
-            r#"{"v":1,"op":"open","links":[{"url":"https://e.com/"#,
+            r#"{"v":2,"op":"open","links":[{"url":"https://e.com/"#,
             r#""}]}"#,
         );
         let pad = usize::try_from(MAX_MESSAGE).unwrap() - head.len() - tail.len();
@@ -192,7 +198,7 @@ mod tests {
     #[test]
     fn oversized_and_empty_messages_are_refused() {
         let huge = format!(
-            "{{\"v\":1,\"op\":\"open\",\"links\":[{{\"url\":\"https://e.com/{}\"}}]}}\n",
+            "{{\"v\":2,\"op\":\"open\",\"links\":[{{\"url\":\"https://e.com/{}\"}}]}}\n",
             "a".repeat(usize::try_from(MAX_MESSAGE).unwrap())
         );
         let err = read_message::<Request>(&mut Cursor::new(huge.into_bytes())).unwrap_err();

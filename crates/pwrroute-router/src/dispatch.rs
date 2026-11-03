@@ -1,9 +1,9 @@
-//! The dispatch thread: normalize, resolve, launch, record.
+//! The resolver owner: normalize, schedule bounded I/O, resolve, record.
 
 use std::{
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex, OnceLock, PoisonError,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc,
     },
@@ -13,8 +13,7 @@ use std::{
 
 use anyhow::Result;
 use pwrroute_engine::{
-    AppType, Browser, Engine, HttpNetwork, Link as EngineLink, Network, Opener, ShortLinks, Source,
-    Stage, Trace,
+    AppType, Browser, Engine, Link as EngineLink, Network, Opener, ShortLinks, Source, Stage, Trace,
 };
 
 use crate::{
@@ -146,7 +145,8 @@ fn rule_steps(trace: &Trace) -> Vec<Step> {
 pub type ResolverFactory = Box<dyn FnOnce() -> Result<Box<dyn Resolver>> + Send>;
 
 /// Called on the dispatch thread after each recorded dispatch (not for Test
-/// a link). Keep it quick: the next link waits for it.
+/// a link). Keep it quick and do not call blocking router methods: this
+/// callback runs on the resolver owner.
 pub type DispatchCallback = Arc<dyn Fn(&DispatchRecord) + Send + Sync>;
 
 /// Called on the thread that hands a link to the router (AppKit's, for an
@@ -162,7 +162,7 @@ pub const SLOW_DISPATCH: Duration = Duration::from_millis(500);
 /// Where the fallback browser comes from: asked each time a link needs it,
 /// so a choice saved while the router runs (first run, an edit of
 /// `rules.json`) applies from the next link, without a restart. Keep the
-/// call cheap; it runs on the dispatch thread, though only when a link
+/// call cheap; it runs on the resolver owner, though only when a link
 /// falls back.
 #[derive(Clone)]
 pub struct FallbackSource(Arc<dyn Fn() -> Option<(String, String)> + Send + Sync>);
@@ -231,8 +231,8 @@ pub struct Options {
     pub diagnostic_log: Option<PathBuf>,
     /// What expands short links: the one request a dispatch makes off the
     /// machine, to the shortener's host, as Finicky made it. `None`, the
-    /// default, is the real network ([`HttpNetwork`]), built on the dispatch
-    /// thread the first time a short link arrives; tests pass a fake.
+    /// default, is the real network (`pwrroute_engine::HttpNetwork`), built on an
+    /// I/O lane the first time a short link arrives; tests pass a fake.
     pub network: Option<Arc<dyn Network + Send + Sync>>,
 }
 
@@ -590,6 +590,9 @@ impl From<RouterGone> for OpenLaterError {
     }
 }
 
+mod pipeline;
+use pipeline::{Admission, Permit, Pipeline};
+
 enum Command {
     Dispatch {
         request: Queued,
@@ -605,6 +608,7 @@ enum Command {
         received: Instant,
         received_at: SystemTime,
         reply: mpsc::Sender<std::result::Result<DispatchRecord, OpenLaterError>>,
+        permit: Permit,
     },
     Replace {
         factory: ResolverFactory,
@@ -622,10 +626,19 @@ enum Command {
         reply: mpsc::Sender<()>,
     },
     Refresh,
+    Expanded {
+        lane: usize,
+        job: pipeline::Expanded,
+    },
+    Launched {
+        lane: usize,
+        result: pipeline::Attempt,
+    },
     Shutdown,
 }
 
 struct Queued {
+    _permit: Permit,
     id: DispatchId,
     link: Link,
     forwarded: bool,
@@ -633,7 +646,7 @@ struct Queued {
     received_at: SystemTime,
 }
 
-/// The resident router. Dropping it finishes the link in hand and stops the
+/// The resident router. Dropping it closes admission, drains accepted links and stops the
 /// dispatch thread; outstanding [`RouterHandle`]s then report it gone.
 pub struct Router {
     handle: RouterHandle,
@@ -654,7 +667,10 @@ impl Router {
         resolver: Option<ResolverFactory>,
         launcher: impl Launcher,
     ) -> std::io::Result<Self> {
-        let (tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::sync_channel(128);
+        let admission = Arc::new(Admission::default());
+        let worker_admission = admission.clone();
+        let io = Pipeline::new(Box::new(launcher), tx.clone(), options.network.clone())?;
         let on_received = options.on_received.clone();
         let diagnostic_log = options.diagnostic_log.clone();
         let recent = Arc::new(RecentDispatches::new(options.retention));
@@ -670,20 +686,16 @@ impl Router {
         let thread = thread::Builder::new()
             .name("pwrroute-dispatch".into())
             .spawn(move || {
-                let network = OnceLock::new();
-                if let Some(fake) = options.network.clone() {
-                    let _ = network.set(fake);
-                }
                 Worker {
                     resolver: build(resolver),
-                    launcher: Box::new(launcher),
+                    admission: worker_admission,
+                    io,
                     recent: worker_recent,
                     journal: options.journal.clone().map(Journal::new),
                     journal_config: worker_journal,
                     slot: worker_slot,
                     catch: worker_catch,
                     next_id: worker_next_id,
-                    network,
                     options,
                 }
                 .run(&rx);
@@ -691,6 +703,7 @@ impl Router {
         Ok(Self {
             handle: RouterHandle {
                 tx,
+                admission,
                 recent,
                 journal,
                 slot,
@@ -710,7 +723,7 @@ impl Router {
 
 impl Drop for Router {
     fn drop(&mut self) {
-        let _ = self.handle.tx.send(Command::Shutdown);
+        self.handle.admission.close(&self.handle.tx);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
@@ -732,7 +745,8 @@ impl std::error::Error for RouterGone {}
 /// Feeds and reads a [`Router`] from any thread.
 #[derive(Clone)]
 pub struct RouterHandle {
-    tx: mpsc::Sender<Command>,
+    tx: mpsc::SyncSender<Command>,
+    admission: Arc<Admission>,
     recent: Arc<RecentDispatches>,
     /// The journal as it is on: what [`retention`](Self::retention) and
     /// [`journal`](Self::journal) describe. The dispatch thread writes it
@@ -759,7 +773,8 @@ impl std::fmt::Debug for RouterHandle {
 }
 
 impl RouterHandle {
-    /// Queues a link and returns at once. The record lands in [`recent`]
+    /// Queues a link. At capacity, waits for a completed record to free a slot.
+    /// Control/status requests do not need a link slot. The record lands in [`recent`]
     /// when the dispatch finishes.
     ///
     /// [`recent`]: Self::recent
@@ -775,7 +790,7 @@ impl RouterHandle {
     /// Dispatches a link and waits for its record.
     pub fn dispatch_and_wait(&self, link: Link) -> std::result::Result<DispatchRecord, RouterGone> {
         let (reply, rx) = mpsc::channel();
-        let request = self.request(link, false);
+        let request = self.request(link, false)?;
         let (id, received) = (request.id, request.received);
         self.send(Command::Dispatch {
             request,
@@ -790,7 +805,7 @@ impl RouterHandle {
     /// only changes where dispatches go.
     pub fn test(&self, link: Link) -> std::result::Result<DispatchRecord, RouterGone> {
         let (reply, rx) = mpsc::channel();
-        let request = self.request(link, false);
+        let request = self.request(link, false)?;
         self.send(Command::Test { request, reply })?;
         rx.recv().map_err(|_| RouterGone)
     }
@@ -807,6 +822,8 @@ impl RouterHandle {
         rx.recv().map_err(|_| RouterGone)
     }
 
+    /// Refreshes the resolver on its owning thread before replying. This is
+    /// a config refresh barrier, not a barrier for outstanding I/O or records.
     pub fn status(&self) -> std::result::Result<RouterStatus, RouterGone> {
         let (reply, rx) = mpsc::channel();
         self.send(Command::Status { reply })?;
@@ -819,7 +836,7 @@ impl RouterHandle {
     ///
     /// [`status`]: Self::status
     pub fn refresh(&self) -> std::result::Result<(), RouterGone> {
-        self.send(Command::Refresh)
+        self.admission.refresh(&self.tx)
     }
 
     /// Recent dispatches, newest first.
@@ -1034,11 +1051,15 @@ impl RouterHandle {
         how: OpenAs,
     ) -> std::result::Result<DispatchRecord, OpenLaterError> {
         let (reply, rx) = mpsc::channel();
+        let received = Instant::now();
+        let received_at = SystemTime::now();
+        let permit = self.admission.acquire()?;
         self.send(Command::Release {
+            permit,
             from: id,
             how,
-            received: Instant::now(),
-            received_at: SystemTime::now(),
+            received,
+            received_at,
             reply,
         })?;
         rx.recv().map_err(|_| OpenLaterError::Gone(RouterGone))?
@@ -1106,7 +1127,11 @@ impl RouterHandle {
                 for link in links {
                     match self.dispatch_forwarded(link) {
                         Ok(id) => response.dispatched.push(id),
-                        Err(e) => return Response::error(e.to_string()),
+                        Err(e) => {
+                            response.ok = false;
+                            response.error = Some(e.to_string());
+                            return response;
+                        }
                     }
                 }
                 response
@@ -1120,7 +1145,7 @@ impl RouterHandle {
     }
 
     fn submit(&self, link: Link, forwarded: bool) -> std::result::Result<DispatchId, RouterGone> {
-        let request = self.request(link, forwarded);
+        let request = self.request(link, forwarded)?;
         let (id, received) = (request.id, request.received);
         self.send(Command::Dispatch {
             request,
@@ -1136,18 +1161,22 @@ impl RouterHandle {
         }
     }
 
-    fn request(&self, link: Link, forwarded: bool) -> Queued {
-        Queued {
+    fn request(&self, link: Link, forwarded: bool) -> std::result::Result<Queued, RouterGone> {
+        let received = Instant::now();
+        let received_at = SystemTime::now();
+        let permit = self.admission.acquire()?;
+        Ok(Queued {
+            _permit: permit,
             id: DispatchId(self.next_id.fetch_add(1, Ordering::Relaxed)),
             link,
             forwarded,
-            received: Instant::now(),
-            received_at: SystemTime::now(),
-        }
+            received,
+            received_at,
+        })
     }
 
     fn send(&self, command: Command) -> std::result::Result<(), RouterGone> {
-        self.tx.send(command).map_err(|_| RouterGone)
+        self.admission.send(&self.tx, command)
     }
 }
 
@@ -1157,8 +1186,9 @@ fn build(factory: Option<ResolverFactory>) -> std::result::Result<Box<dyn Resolv
 }
 
 struct Worker {
+    admission: Arc<Admission>,
     resolver: std::result::Result<Box<dyn Resolver>, String>,
-    launcher: Box<dyn Launcher>,
+    io: Pipeline,
     recent: Arc<RecentDispatches>,
     journal: Option<Journal>,
     /// The handle's copy of the journal's config, kept in step with
@@ -1172,8 +1202,6 @@ struct Worker {
     catch: Catch,
     /// The handle's counter: a link opened later gets a new id.
     next_id: Arc<AtomicU64>,
-    /// `Options::network`, or the real one once a short link needed it.
-    network: OnceLock<Arc<dyn Network + Send + Sync>>,
     options: Options,
 }
 
@@ -1212,87 +1240,6 @@ impl Worker {
 }
 
 impl Worker {
-    fn run(mut self, rx: &mpsc::Receiver<Command>) {
-        while let Ok(command) = rx.recv() {
-            match command {
-                Command::Dispatch { request, reply } => {
-                    let record = self.process(request, &Mode::Dispatch);
-                    let record = self.record(record);
-                    if let Some(reply) = reply {
-                        let _ = reply.send(record);
-                    }
-                }
-                Command::Test { request, reply } => {
-                    let _ = reply.send(self.process(request, &Mode::Test));
-                }
-                Command::Release {
-                    from,
-                    how,
-                    received,
-                    received_at,
-                    reply,
-                } => {
-                    let result = match self.recent.take_pending(from) {
-                        Some(link) => {
-                            let request = Queued {
-                                id: DispatchId(self.next_id.fetch_add(1, Ordering::Relaxed)),
-                                link,
-                                forwarded: false,
-                                received,
-                                received_at,
-                            };
-                            let record = self.process(request, &Mode::Release { from, how });
-                            Ok(self.record(record))
-                        }
-                        None => Err(OpenLaterError::NotPending),
-                    };
-                    let _ = reply.send(result);
-                }
-                Command::Replace { factory, reply } => {
-                    let result = match build(Some(factory)) {
-                        Ok(resolver) => {
-                            self.resolver = Ok(resolver);
-                            Ok(())
-                        }
-                        Err(e) => Err(e),
-                    };
-                    let _ = reply.send(result);
-                }
-                Command::Status { reply } => {
-                    let _ = reply.send(RouterStatus {
-                        config_error: self.in_charge().err(),
-                        dry_run: self.launcher.is_dry_run(),
-                        journal_error: self
-                            .journal
-                            .as_ref()
-                            .and_then(|j| j.error().map(str::to_owned)),
-                    });
-                }
-                Command::SetRetention { retention, reply } => {
-                    self.recent.set_retention(retention);
-                    self.options.retention = retention;
-                    let _ = reply.send(());
-                }
-                Command::SetJournal { config, reply } => {
-                    // The old writer is dropped first: its day's file closes
-                    // before a new one could open the same path.
-                    self.journal = None;
-                    self.journal = config.clone().map(Journal::new);
-                    *self
-                        .journal_config
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner) = config.clone();
-                    self.options.journal = config;
-                    let _ = reply.send(());
-                }
-                Command::Refresh => {
-                    let _ = self.in_charge();
-                }
-                Command::Shutdown => break,
-            }
-        }
-    }
-
     /// The record's line in the diagnostic log, while links are kept at all:
     /// "Nothing is kept" means nothing, here too.
     fn log(&self, record: &DispatchRecord) {
@@ -1309,13 +1256,20 @@ impl Worker {
         log::log!(target: "pwrroute::link", level, "{}", record.log_line());
     }
 
-    fn process(&mut self, request: Queued, mode: &Mode) -> DispatchRecord {
+    fn process(
+        &mut self,
+        request: &Queued,
+        mode: &Mode,
+        expanded: &EngineLink,
+        took: pipeline::Reservation,
+        refresh_error: Option<String>,
+    ) -> DispatchRecord {
         let dequeued = Instant::now();
         let mut record = DispatchRecord {
             id: request.id,
             received_at: request.received_at,
             privacy: Privacy::Full,
-            link: request.link,
+            link: request.link.clone(),
             forwarded: request.forwarded,
             final_url: None,
             browser: None,
@@ -1346,17 +1300,14 @@ impl Worker {
         }
 
         let (mut browser, privacy) =
-            self.resolve(&url, &record.link, &mut record.steps, &mut record.timings);
+            self.resolve(expanded, &record.link, &mut record.steps, refresh_error);
         // An override takes the link after the rules ran (so the rewrites
         // and the privacy level stand), from whatever they chose. A test
         // still reports what the rules say.
         let mut privacy = privacy;
         let mut held = false;
         match mode {
-            Mode::Dispatch => match self
-                .take_catch(record.link.source, privacy)
-                .or_else(|| self.take_override())
-            {
+            Mode::Dispatch => match took.take(self, record.link.source, privacy) {
                 Some(Took::Paused(target)) => {
                     record.steps.push(Step::Paused {
                         skipped: skipped_handler(&record.steps),
@@ -1371,7 +1322,9 @@ impl Worker {
                     browser = destination.browser_for(&browser.url, privacy);
                     privacy = browser.privacy;
                 }
-                Some(Took::Held(sent)) => {
+                // Retention can change while a reserved hold expands.
+                // Never hold a link that would have nowhere to wait.
+                Some(Took::Held(sent)) if self.recent.retention().count > 0 => {
                     record.steps.push(Step::Held {
                         held: sent,
                         skipped: skipped_handler(&record.steps),
@@ -1379,7 +1332,7 @@ impl Worker {
                     });
                     held = true;
                 }
-                None => {}
+                Some(Took::Held(_)) | None => {}
             },
             Mode::Test => {}
             Mode::Release {
@@ -1413,20 +1366,12 @@ impl Worker {
             record.steps.push(Step::Browser {
                 browser: browser.clone(),
             });
-            let mut opened = None;
-            record.outcome = match mode {
-                Mode::Test => Outcome::Tested,
-                Mode::Dispatch | Mode::Release { .. } => {
-                    let launch = Instant::now();
-                    let launched = self.launch(&browser, &mut record.steps, record.id);
-                    record.timings.launch_us = Timings::micros(launch.elapsed());
-                    opened = launched.opened;
-                    launched.outcome
-                }
+            record.outcome = if *mode == Mode::Test {
+                Outcome::Tested
+            } else {
+                Outcome::Failed
             };
-            // The browser that took the link: the fallback when the chosen
-            // one could not be opened, so Activity and the tray name it.
-            record.browser = Some(opened.unwrap_or(browser));
+            record.browser = Some(browser);
         }
         record.timings.total_us = Timings::micros(request.received.elapsed());
         record
@@ -1446,12 +1391,21 @@ impl Worker {
     /// where it lands.
     fn resolve(
         &self,
-        url: &str,
+        expanded: &EngineLink,
         link: &Link,
         steps: &mut Vec<Step>,
-        timings: &mut Timings,
+        refresh_error: Option<String>,
     ) -> (Browser, Privacy) {
-        let resolver = match self.in_charge() {
+        let url = expanded.original_url.as_str();
+        let resolver = match refresh_error.map_or_else(
+            || {
+                self.resolver
+                    .as_ref()
+                    .map(|resolver| resolver.as_ref())
+                    .map_err(Clone::clone)
+            },
+            Err,
+        ) {
             Ok(resolver) => resolver,
             Err(reason) => {
                 steps.push(Step::Fallback { reason });
@@ -1459,10 +1413,14 @@ impl Worker {
             }
         };
         let opener = link.opener.as_ref().map(Opener::from);
-        let expanded = self.expand(resolver, url, steps, timings);
+        if expanded.was_expanded() {
+            steps.push(Step::Expanded {
+                url: expanded.url.clone(),
+            });
+        }
         let url = expanded.url.as_str();
         let mut privacy = Privacy::Full;
-        let mut browser = match resolver.resolve(&expanded, opener.as_ref()) {
+        let mut browser = match resolver.resolve(expanded, opener.as_ref()) {
             Ok(resolved) => {
                 privacy = resolved.privacy;
                 if resolved.rule_steps.is_empty() {
@@ -1502,113 +1460,6 @@ impl Worker {
         (browser, privacy)
     }
 
-    /// Expands `url` when the resolver's shortener list says it is a short
-    /// link: the one request a dispatch makes off the machine, made here on
-    /// the dispatch thread, after the resolver's list is read and before
-    /// its resolve. The link goes on unchanged when it is not short, the
-    /// list is empty, or the shortener does not answer; nothing is logged.
-    fn expand(
-        &self,
-        resolver: &dyn Resolver,
-        url: &str,
-        steps: &mut Vec<Step>,
-        timings: &mut Timings,
-    ) -> EngineLink {
-        let Some(short_links) = resolver.short_links() else {
-            return EngineLink::new(url);
-        };
-        if !short_links.is_short(url) {
-            return EngineLink::new(url);
-        }
-        let network = self
-            .network
-            .get_or_init(|| Arc::new(HttpNetwork::new()) as Arc<dyn Network + Send + Sync>);
-        let started = Instant::now();
-        let link = short_links.expand(url, network.as_ref());
-        // At least 1 µs, so the log can tell "tried" from "not short".
-        timings.expand_us = Timings::micros(started.elapsed()).max(1);
-        if link.was_expanded() {
-            steps.push(Step::Expanded {
-                url: link.url.clone(),
-            });
-        }
-        link
-    }
-
-    /// Opens the link in `browser`, or, when that fails and `browser` is not
-    /// the fallback already, in the fallback browser: a rule that names a
-    /// browser this machine does not have must not lose the link. The
-    /// fallback is tried once; `Failed` means both failed.
-    fn launch(&mut self, browser: &Browser, steps: &mut Vec<Step>, id: DispatchId) -> Launched {
-        if is_self(browser) {
-            steps.push(Step::LaunchFailed {
-                message: "the fallback browser is PwrRoute itself".into(),
-            });
-            return Launched::failed();
-        }
-        if let Ok(outcome) = self.try_launch(browser, steps, id, 1) {
-            return Launched {
-                outcome,
-                opened: None,
-            };
-        }
-        let mut fallback = self.fallback(&browser.url);
-        if same_app(browser, &fallback) || is_self(&fallback) {
-            return Launched::failed();
-        }
-        // A private window was asked for: the fallback opens one too, so a
-        // missing browser never puts a private link in a normal window.
-        fallback.private = browser.private;
-        // The browser's name only: the launcher's message is withheld in a
-        // host-only record, this reason is kept.
-        steps.push(Step::Fallback {
-            reason: format!("{} could not be opened", browser.name),
-        });
-        match self.try_launch(&fallback, steps, id, 2) {
-            Ok(outcome) => Launched {
-                outcome,
-                opened: Some(fallback),
-            },
-            Err(()) => Launched::failed(),
-        }
-    }
-
-    /// One launch, traced: `Launched` on success, `LaunchFailed` with the
-    /// launcher's message otherwise.
-    fn try_launch(
-        &mut self,
-        browser: &Browser,
-        steps: &mut Vec<Step>,
-        id: DispatchId,
-        attempt: u8,
-    ) -> Result<Outcome, ()> {
-        let dry_run = self.launcher.is_dry_run();
-        let kept = self.recent.retention().count > 0 || self.journal.is_some();
-        let result = if self.options.diagnostic_log.is_some() && kept {
-            self.launcher.launch_observed(browser, &mut |detail| {
-                log::info!(target: "pwrroute::link", "link {} launch attempt={attempt}: {detail}", id.0);
-            })
-        } else {
-            self.launcher.launch(browser)
-        };
-        match result {
-            Ok(()) => {
-                steps.push(Step::Launched { dry_run });
-                Ok(if dry_run {
-                    Outcome::DryRun
-                } else {
-                    Outcome::Opened
-                })
-            }
-            Err(e) => {
-                steps.push(Step::LaunchFailed {
-                    message: format!("{e:#}"),
-                });
-                Err(())
-            }
-        }
-    }
-
     /// The link held for a rule, when "Add a rule for the next link" is
     /// armed and the link came from the OS: it disarms, and the slot is
     /// not touched, so a send's or a hold's count is not used. Disarms
@@ -1635,26 +1486,7 @@ impl Worker {
     fn take_override(&self) -> Option<Took> {
         let keeps_nothing = self.recent.retention().count == 0;
         let mut slot = self.slot.lock().unwrap_or_else(PoisonError::into_inner);
-        if slot.as_ref().is_some_and(|o| {
-            o.expired(SystemTime::now()) || (keeps_nothing && matches!(o, Override::Holding(_)))
-        }) {
-            *slot = None;
-        }
-        let (took, used_up) = match slot.as_mut()? {
-            Override::Paused(target) => (Took::Paused(target.clone()), false),
-            Override::Sending(send) => {
-                let (sent, used_up) = send.scope.take();
-                (Took::Sent(send.destination.clone(), sent), used_up)
-            }
-            Override::Holding(scope) => {
-                let (held, used_up) = scope.take();
-                (Took::Held(held), used_up)
-            }
-        };
-        if used_up {
-            *slot = None;
-        }
-        Some(took)
+        take_override_from(&mut slot, keeps_nothing, SystemTime::now())
     }
 
     /// The fallback browser with `url`: [`Options::fallback`] as it is now,
@@ -1672,6 +1504,36 @@ impl Worker {
             privacy: Privacy::Full,
         }
     }
+}
+
+/// One admission/ordered-Catch commit, with an explicit clock so the
+/// expiry boundary can be tested without racing a wall-clock timer.
+fn take_override_from(
+    slot: &mut Option<Override>,
+    keeps_nothing: bool,
+    now: SystemTime,
+) -> Option<Took> {
+    if slot
+        .as_ref()
+        .is_some_and(|o| o.expired(now) || (keeps_nothing && matches!(o, Override::Holding(_))))
+    {
+        *slot = None;
+    }
+    let (took, used_up) = match slot.as_mut()? {
+        Override::Paused(target) => (Took::Paused(target.clone()), false),
+        Override::Sending(send) => {
+            let (sent, used_up) = send.scope.take();
+            (Took::Sent(send.destination.clone(), sent), used_up)
+        }
+        Override::Holding(scope) => {
+            let (held, used_up) = scope.take();
+            (Took::Held(held), used_up)
+        }
+    };
+    if used_up {
+        *slot = None;
+    }
+    Some(took)
 }
 
 /// The most links one `Next` send can take.
@@ -1692,23 +1554,6 @@ fn skipped_handler(steps: &[Step]) -> Option<usize> {
         },
         _ => None,
     })
-}
-
-/// What [`Worker::launch`] did.
-struct Launched {
-    outcome: Outcome,
-    /// The fallback browser, when it opened the link instead of the one
-    /// chosen.
-    opened: Option<Browser>,
-}
-
-impl Launched {
-    fn failed() -> Self {
-        Self {
-            outcome: Outcome::Failed,
-            opened: None,
-        }
-    }
 }
 
 /// Whether two browsers name the same app the same way (type and name,

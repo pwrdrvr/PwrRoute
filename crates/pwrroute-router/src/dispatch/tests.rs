@@ -17,6 +17,8 @@ use crate::{
     trace::{NotOpenedReason, Sent, WITHHELD},
 };
 
+mod pipeline;
+
 const CONFIG: &str = r#"
 export default {
   defaultBrowser: "Safari",
