@@ -31,9 +31,12 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use gpui_kit::{App, AppContext as _, Context, DisplayId, ParentElement as _, Render, Styled as _, Subscription, Window, WindowHandle};
+use gpui_kit::{
+    App, AppContext as _, Context, DisplayId, ParentElement as _, Render, Styled as _,
+    Subscription, Window, WindowHandle,
+};
 use pwrroute_engine::{
-    AppType, BrowserSpec, NativeHost, Engine, Limits, Precedence, RulesFile, discovery,
+    AppType, BrowserSpec, Engine, Limits, NativeHost, Precedence, RulesFile, discovery,
 };
 use serde::{Deserialize, Serialize};
 
@@ -819,7 +822,9 @@ pub fn open(cx: &mut App) {
         return;
     }
     if let Some(window) = cx.try_global::<Opening>().map(|opening| opening.window) {
-        let _ = window.update(cx, |_, window, cx| crate::menu_bar::bring_forward(window, cx));
+        let _ = window.update(cx, |_, window, cx| {
+            crate::menu_bar::bring_forward(window, cx)
+        });
         return;
     }
     let facts = Facts::probe(cx);
@@ -828,40 +833,81 @@ pub fn open(cx: &mut App) {
 }
 
 fn prepare(facts: Facts, config: Option<PathBuf>, cx: &mut App) {
-    if config.is_none() && !crate::browser_scan::is_loading(cx) && crate::browser_scan::error(cx).is_none() {
+    if config.is_none()
+        && !crate::browser_scan::is_loading(cx)
+        && crate::browser_scan::error(cx).is_none()
+    {
         open_ready(facts, cx);
         return;
     }
     let request = Rc::new(());
     let display = crate::placement::display_for_new_window(cx);
-    let bounds = gpui_kit::Bounds::centered(display, gpui_kit::size(crate::theme::px(680.0), crate::theme::px(320.0)), cx);
+    let bounds = gpui_kit::Bounds::centered(
+        display,
+        gpui_kit::size(crate::theme::px(680.0), crate::theme::px(320.0)),
+        cx,
+    );
     let token = request.clone();
-    let Ok(window) = cx.open_window(gpui_kit::WindowOptions {
-        window_bounds: Some(gpui_kit::WindowBounds::Windowed(bounds)), display_id: display,
-        titlebar: Some(gpui_kit::TitlebarOptions { title: Some("Set up PwrRoute".into()), ..Default::default() }),
-        app_id: Some("pwrroute".into()), ..Default::default()
-    }, |_, cx| cx.new(|cx| {
-        cx.on_release(move |_, cx| {
-            if cx.try_global::<Opening>().is_some_and(|opening| Rc::ptr_eq(&opening.request, &token)) {
-                cx.remove_global::<Opening>();
-                crate::engine_worker::cancel_service(cx, crate::engine_worker::Lane::Config);
-            }
-        }).detach();
-        Preparing { failure: None }
-    })) else { return; };
-    cx.set_global(Opening { request: request.clone(), window, facts, config: config.clone(), config_ready: config.is_none() });
+    let Ok(window) = cx.open_window(
+        gpui_kit::WindowOptions {
+            window_bounds: Some(gpui_kit::WindowBounds::Windowed(bounds)),
+            display_id: display,
+            titlebar: Some(gpui_kit::TitlebarOptions {
+                title: Some("Set up PwrRoute".into()),
+                ..Default::default()
+            }),
+            app_id: Some("pwrroute".into()),
+            ..Default::default()
+        },
+        |_, cx| {
+            cx.new(|cx| {
+                cx.on_release(move |_, cx| {
+                    if cx
+                        .try_global::<Opening>()
+                        .is_some_and(|opening| Rc::ptr_eq(&opening.request, &token))
+                    {
+                        cx.remove_global::<Opening>();
+                        crate::engine_worker::cancel_service(
+                            cx,
+                            crate::engine_worker::Lane::Config,
+                        );
+                    }
+                })
+                .detach();
+                Preparing { failure: None }
+            })
+        },
+    ) else {
+        return;
+    };
+    cx.set_global(Opening {
+        request: request.clone(),
+        window,
+        facts,
+        config: config.clone(),
+        config_ready: config.is_none(),
+    });
     cx.activate(true);
     if config.is_some() {
-        let result = crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || {
-            let stamps = crate::engine_worker::primary(config.as_deref());
-            (config.map(FinickyFound::read), stamps)
-        });
+        let result =
+            crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || {
+                let stamps = crate::engine_worker::primary(config.as_deref());
+                (config.map(FinickyFound::read), stamps)
+            });
         let token = request.clone();
         let task = cx.spawn(async move |cx| {
             if let Ok((finicky, stamps)) = crate::engine_worker::receive(result).await {
                 cx.update(|cx| {
-                    if !cx.try_global::<Opening>().is_some_and(|opening| Rc::ptr_eq(&opening.request, &token)) { return; }
-                    if !crate::engine_worker::unchanged(&stamps) { restart_opening(cx); return; }
+                    if !cx
+                        .try_global::<Opening>()
+                        .is_some_and(|opening| Rc::ptr_eq(&opening.request, &token))
+                    {
+                        return;
+                    }
+                    if !crate::engine_worker::unchanged(&stamps) {
+                        restart_opening(cx);
+                        return;
+                    }
                     let opening = cx.global_mut::<Opening>();
                     opening.facts.finicky = finicky;
                     opening.config_ready = true;
@@ -875,30 +921,72 @@ fn prepare(facts: Facts, config: Option<PathBuf>, cx: &mut App) {
     // failed scan as an error with Retry instead of an endless spinner.
     let task = cx.spawn(async move |cx| {
         loop {
-            cx.background_executor().timer(std::time::Duration::from_millis(250)).await;
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(250))
+                .await;
             let keep = cx.update(|cx| {
-                if !cx.try_global::<Opening>().is_some_and(|opening| Rc::ptr_eq(&opening.request, &request)) { return false; }
+                if !cx
+                    .try_global::<Opening>()
+                    .is_some_and(|opening| Rc::ptr_eq(&opening.request, &request))
+                {
+                    return false;
+                }
                 finish_opening(cx);
                 cx.try_global::<Opening>().is_some()
             });
-            if !keep { break; }
+            if !keep {
+                break;
+            }
         }
     });
     crate::engine_worker::hold(cx, crate::engine_worker::Lane::Onboarding, task);
 }
 
-struct Opening { request: Rc<()>, window: WindowHandle<Preparing>, facts: Facts, config: Option<PathBuf>, config_ready: bool }
+struct Opening {
+    request: Rc<()>,
+    window: WindowHandle<Preparing>,
+    facts: Facts,
+    config: Option<PathBuf>,
+    config_ready: bool,
+}
 impl gpui_kit::Global for Opening {}
-struct Preparing { failure: Option<String> }
+struct Preparing {
+    failure: Option<String>,
+}
 impl Render for Preparing {
     fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl gpui_kit::IntoElement {
         use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _};
-        gpui_kit::div().size_full().flex().flex_col().justify_center().p(crate::theme::px(32.0)).gap(crate::theme::px(16.0))
+        gpui_kit::div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .p(crate::theme::px(32.0))
+            .gap(crate::theme::px(16.0))
             .bg(crate::theme::bg_app())
-            .child(crate::theme::text("Set up PwrRoute", 20.0, 600.0, crate::theme::text_primary()))
-            .child(crate::theme::text(self.failure.clone().unwrap_or_else(|| "Reading the config and looking for browsers…".into()), 13.0, 500.0, crate::theme::text_muted()))
-            .children(self.failure.as_ref().map(|_| crate::widgets::button("Try again", crate::widgets::ButtonKind::Default, true)
-                .id("setup-retry-scan").on_click(cx.listener(|this, _, _, cx| { crate::browser_scan::rescan(cx); this.failure = None; cx.notify(); }))))
+            .child(crate::theme::text(
+                "Set up PwrRoute",
+                20.0,
+                600.0,
+                crate::theme::text_primary(),
+            ))
+            .child(crate::theme::text(
+                self.failure
+                    .clone()
+                    .unwrap_or_else(|| "Reading the config and looking for browsers…".into()),
+                13.0,
+                500.0,
+                crate::theme::text_muted(),
+            ))
+            .children(self.failure.as_ref().map(|_| {
+                crate::widgets::button("Try again", crate::widgets::ButtonKind::Default, true)
+                    .id("setup-retry-scan")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        crate::browser_scan::rescan(cx);
+                        this.failure = None;
+                        cx.notify();
+                    }))
+            }))
     }
 }
 
@@ -915,14 +1003,24 @@ fn restart_opening(cx: &mut App) {
 }
 
 fn finish_opening(cx: &mut App) {
-    let Some(opening) = cx.try_global::<Opening>() else { return; };
+    let Some(opening) = cx.try_global::<Opening>() else {
+        return;
+    };
     let window = opening.window;
-    if opening.config != crate::router::config_in_charge() { restart_opening(cx); return; }
-    if let Some(error) = crate::browser_scan::error(cx) {
-        let _ = window.update(cx, |view, _, cx| { view.failure = Some(error); cx.notify(); });
+    if opening.config != crate::router::config_in_charge() {
+        restart_opening(cx);
         return;
     }
-    if !opening.config_ready || crate::browser_scan::is_loading(cx) { return; }
+    if let Some(error) = crate::browser_scan::error(cx) {
+        let _ = window.update(cx, |view, _, cx| {
+            view.failure = Some(error);
+            cx.notify();
+        });
+        return;
+    }
+    if !opening.config_ready || crate::browser_scan::is_loading(cx) {
+        return;
+    }
     let mut facts = opening.facts.clone();
     facts.browsers = choices(crate::browser_scan::apps(cx), &hidden(cx));
     facts.handler = default_browser::state(cx);
@@ -944,7 +1042,11 @@ pub fn refresh_browsers(cx: &mut App) {
                 view.model.browser_error = error.clone();
                 if !loading && error.is_none() {
                     view.model.browsers = browsers.clone();
-                    if view.model.still_blocked().len() < before && let Some(access) = &mut view.model.access { access.still_blocked = false; }
+                    if view.model.still_blocked().len() < before
+                        && let Some(access) = &mut view.model.access
+                    {
+                        access.still_blocked = false;
+                    }
                     view.preselect(cx);
                 }
                 cx.notify();
@@ -2389,14 +2491,25 @@ mod tests {
         assert_eq!(main_window_display(None, None, &connected), None);
     }
     #[gpui_kit::test]
-    fn initial_scan_shows_preparing_and_close_cancels_without_opening_or_saving_setup(cx: &mut TestAppContext) {
+    fn initial_scan_shows_preparing_and_close_cancels_without_opening_or_saving_setup(
+        cx: &mut TestAppContext,
+    ) {
         let (release, wait) = async_channel::bounded(1);
         cx.update(|cx| {
-            crate::browser_scan::install(pwrroute_browsers::Env::fixture(pwrroute_browsers::Platform::current(), std::env::temp_dir()), cx);
-            crate::browser_scan::set_test_producer(cx, std::sync::Arc::new(move || {
-                let wait = wait.clone();
-                Box::pin(async move { wait.recv().await.unwrap() })
-            }));
+            crate::browser_scan::install(
+                pwrroute_browsers::Env::fixture(
+                    pwrroute_browsers::Platform::current(),
+                    std::env::temp_dir(),
+                ),
+                cx,
+            );
+            crate::browser_scan::set_test_producer(
+                cx,
+                std::sync::Arc::new(move || {
+                    let wait = wait.clone();
+                    Box::pin(async move { wait.recv().await.unwrap() })
+                }),
+            );
             install(cx);
             let _ = crate::browser_scan::apps(cx);
             let mut facts = facts();
@@ -2409,7 +2522,10 @@ mod tests {
         });
         cx.run_until_parked();
         let window = cx.update(|cx| cx.global::<Opening>().window);
-        let _ = window.update(cx, |view, window, _| { assert!(view.failure.is_none()); window.remove_window(); });
+        let _ = window.update(cx, |view, window, _| {
+            assert!(view.failure.is_none());
+            window.remove_window();
+        });
         cx.run_until_parked();
         release.try_send(Ok(vec![])).unwrap();
         cx.run_until_parked();
@@ -2420,5 +2536,4 @@ mod tests {
             assert!(crate::settings_store::store(cx).is_none());
         });
     }
-
 }

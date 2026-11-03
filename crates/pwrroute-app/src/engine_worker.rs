@@ -322,21 +322,27 @@ mod tests {
     #[test]
     fn shutdown_drops_non_send_engine_state_on_its_owner_thread() {
         struct Owned(std::sync::mpsc::Sender<std::thread::ThreadId>);
-        impl Drop for Owned { fn drop(&mut self) { let _ = self.0.send(std::thread::current().id()); } }
+        impl Drop for Owned {
+            fn drop(&mut self) {
+                let _ = self.0.send(std::thread::current().id());
+            }
+        }
         let worker = EngineWorker::new();
         let (created, ready) = mpsc::channel();
         let (dropped, finished) = mpsc::channel();
         let result = worker.submit(Lane::Preview, Duration::ZERO, move |_| {
             let owned = std::rc::Rc::new(Owned(dropped));
             created.send(()).unwrap();
-            move || { let _ = &owned; None::<()> }
+            move || {
+                let _ = &owned;
+                None::<()>
+            }
         });
         ready.recv().unwrap();
         drop(worker);
         assert_ne!(finished.recv().unwrap(), thread::current().id());
         assert!(result.recv_blocking().is_err());
     }
-
 }
 
 pub type Stamps = Vec<(std::path::PathBuf, Option<std::time::SystemTime>)>;

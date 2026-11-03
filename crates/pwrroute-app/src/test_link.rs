@@ -33,8 +33,8 @@ use gpui_kit::{
     StrikethroughStyle, Styled as _, StyledText, Window, deferred, div,
 };
 use pwrroute_engine::{
-    AppType, Expectation, HttpNetwork, Limits, Link, NativeHost, Network, RouteTest, RulesFile, Sources,
-    Trace,
+    AppType, Expectation, HttpNetwork, Limits, Link, NativeHost, Network, RouteTest, RulesFile,
+    Sources, Trace,
 };
 
 use crate::app::PwrRoute;
@@ -271,29 +271,50 @@ impl TestLink {
             machine: self.machine.clone(),
         };
         // Fetch the window's bounded worker without borrowing PwrRoute.
-        let worker = self.worker.submit(crate::engine_worker::Lane::Link, Duration::ZERO, move |_| {
-            let before = crate::engine_worker::primary(sources.config.as_deref());
-            let engine = crate::router::engine_as_routed(&sources, Rc::new(NativeHost::new()), Limits::default())
+        let worker = self.worker.submit(
+            crate::engine_worker::Lane::Link,
+            Duration::ZERO,
+            move |_| {
+                let before = crate::engine_worker::primary(sources.config.as_deref());
+                let engine = crate::router::engine_as_routed(
+                    &sources,
+                    Rc::new(NativeHost::new()),
+                    Limits::default(),
+                )
                 .map_err(|e| format!("The rules did not load: {e:#}"));
-            let stamps = engine.as_ref().map_or_else(|_| before.clone(), |engine| crate::engine_worker::dependencies(before.clone(), engine));
-            let engine_opener = opener.as_ref().map(|app| pwrroute_engine::Opener {
-                name: app.name.to_string(), bundle_id: app.bundle_id.to_string(), ..Default::default()
-            });
-            let mut link = None;
-            move || {
-                let engine = match &engine { Ok(engine) => engine, Err(error) => return Some((Err(error.clone()), stamps.clone())) };
-                if link.is_none() {
-                    link = Some(if engine.short_links().is_short(&url) {
-                        let network = network.clone().unwrap_or_else(|| Arc::new(HttpNetwork::new()));
-                        engine.short_links().expand(&url, network.as_ref())
-                    } else { Link::new(&url) });
-                    return None;
+                let stamps = engine.as_ref().map_or_else(
+                    |_| before.clone(),
+                    |engine| crate::engine_worker::dependencies(before.clone(), engine),
+                );
+                let engine_opener = opener.as_ref().map(|app| pwrroute_engine::Opener {
+                    name: app.name.to_string(),
+                    bundle_id: app.bundle_id.to_string(),
+                    ..Default::default()
+                });
+                let mut link = None;
+                move || {
+                    let engine = match &engine {
+                        Ok(engine) => engine,
+                        Err(error) => return Some((Err(error.clone()), stamps.clone())),
+                    };
+                    if link.is_none() {
+                        link = Some(if engine.short_links().is_short(&url) {
+                            let network = network
+                                .clone()
+                                .unwrap_or_else(|| Arc::new(HttpNetwork::new()));
+                            engine.short_links().expand(&url, network.as_ref())
+                        } else {
+                            Link::new(&url)
+                        });
+                        return None;
+                    }
+                    let trace = engine
+                        .trace(link.as_ref().unwrap(), engine_opener.as_ref())
+                        .map_err(|e| format!("The rules failed: {e:#}"));
+                    Some((trace, stamps.clone()))
                 }
-                let trace = engine.trace(link.as_ref().unwrap(), engine_opener.as_ref())
-                    .map_err(|e| format!("The rules failed: {e:#}"));
-                Some((trace, stamps.clone()))
-            }
-        });
+            },
+        );
         // opener is also needed by the UI; re-read its immutable choice.
         let opener = self.opener();
         self.task = Some(cx.spawn(async move |this, cx| {
@@ -308,8 +329,14 @@ impl TestLink {
                         return;
                     }
                     let (trace, stamps) = result;
-                    if crate::sync::machine() != machine { this.test.run(cx); return; }
-                    if !crate::engine_worker::unchanged(&stamps) { this.test.run(cx); return; }
+                    if crate::sync::machine() != machine {
+                        this.test.run(cx);
+                        return;
+                    }
+                    if !crate::engine_worker::unchanged(&stamps) {
+                        this.test.run(cx);
+                        return;
+                    }
                     this.test.finish(trace, opener, started);
                     cx.notify();
                 });
@@ -398,13 +425,14 @@ impl TestLink {
         if self.rules == rules && same_machine {
             return;
         }
-        let routing_unchanged = same_machine && RulesFile {
-            tests: Vec::new(),
-            ..self.rules.clone()
-        } == RulesFile {
-            tests: Vec::new(),
-            ..rules.clone()
-        };
+        let routing_unchanged = same_machine
+            && RulesFile {
+                tests: Vec::new(),
+                ..self.rules.clone()
+            } == RulesFile {
+                tests: Vec::new(),
+                ..rules.clone()
+            };
         if routing_unchanged {
             self.rules = rules;
             return;

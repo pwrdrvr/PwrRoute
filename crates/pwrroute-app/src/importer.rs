@@ -340,7 +340,13 @@ impl ImportModel {
     /// the router reads now, if any; `existing` is `rules.json` as it
     /// stands.
     #[cfg(test)]
-    pub fn read(path: &Path, home: Option<&Path>, in_charge: Option<&Path>, recent: &[&str], existing: RulesFile) -> Self {
+    pub fn read(
+        path: &Path,
+        home: Option<&Path>,
+        in_charge: Option<&Path>,
+        recent: &[&str],
+        existing: RulesFile,
+    ) -> Self {
         Self::read_with_stamps(path, home, in_charge, recent, existing).0
     }
 
@@ -355,7 +361,10 @@ impl ImportModel {
         let charge = Charge::of(path, in_charge, home);
         let before = crate::engine_worker::primary(Some(path));
         let engine = Engine::load(path, Rc::new(NativeHost::new()), Limits::default());
-        let stamps = engine.as_ref().map_or_else(|_| before.clone(), |engine| crate::engine_worker::dependencies(before.clone(), engine));
+        let stamps = engine.as_ref().map_or_else(
+            |_| before.clone(),
+            |engine| crate::engine_worker::dependencies(before.clone(), engine),
+        );
         let reviewed = engine.and_then(|engine| {
             let description = engine.describe()?;
             let review = engine.review_import(recent)?;

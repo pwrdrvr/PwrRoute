@@ -1512,7 +1512,8 @@ fn main() {
                 Some(&importer_config),
                 &[],
                 existing,
-            ).0
+            )
+            .0
         };
         // Shown as the design names it, not by the fixture's path.
         model.shown = if name == "importer-finicky-rules" {
