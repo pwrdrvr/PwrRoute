@@ -180,7 +180,15 @@ impl Reloader {
             read,
             stale,
             rules_used,
-        } = attempt(&choice, rules_path.as_deref(), &host, limits, None, false, &[]);
+        } = attempt(
+            &choice,
+            rules_path.as_deref(),
+            &host,
+            limits,
+            None,
+            false,
+            &[],
+        );
         let (loaded, result) = match result {
             Ok(engine) => (Some(engine), Ok(())),
             Err(e) => (partial_engine, Err(e)),

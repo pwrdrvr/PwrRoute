@@ -546,28 +546,42 @@ fn privacy_fields_round_trip_through_the_file_and_stay_absent_when_unused() {
 fn suggestion_links() -> impl proptest::strategy::Strategy<Value = String> {
     use proptest::prelude::*;
     let segment = prop::collection::vec(
-        prop::sample::select(vec!["a", "0", "^", "*", "\\", "%5E", "%", " ", "é", "{", "}", "`", ":", "@", "[", "]"]),
+        prop::sample::select(vec![
+            "a", "0", "^", "*", "\\", "%5E", "%", " ", "é", "{", "}", "`", ":", "@", "[", "]",
+        ]),
         0..5,
-    ).prop_map(|parts| parts.concat());
+    )
+    .prop_map(|parts| parts.concat());
     let path = prop::collection::vec(segment, 0..5).prop_map(|parts| parts.join("/"));
     (
         prop::sample::select(vec!["https", "http", "ftp", "myapp", "mailto", "data"]),
         prop::sample::select(vec!["", "a@", "a:0@", ":0@"]),
-        prop::sample::select(vec!["site.com", "a.example.com", "a.b.example.co.uk", "localhost", "127.0.0.1", "[::1]"]),
+        prop::sample::select(vec![
+            "site.com",
+            "a.example.com",
+            "a.b.example.co.uk",
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
+        ]),
         prop::sample::select(vec!["", ":8443"]),
         path,
         prop::sample::select(vec!["", "?q=a", "#top", "?q=^*#x"]),
-    ).prop_map(|(scheme, user, host, port, path, tail)| {
-        if matches!(scheme, "mailto" | "data") {
-            format!("{scheme}:{path}{tail}")
-        } else {
-            format!("{scheme}://{user}{host}{port}/{path}{tail}")
-        }
-    })
+    )
+        .prop_map(|(scheme, user, host, port, path, tail)| {
+            if matches!(scheme, "mailto" | "data") {
+                format!("{scheme}:{path}{tail}")
+            } else {
+                format!("{scheme}://{user}{host}{port}/{path}{tail}")
+            }
+        })
 }
 
 fn candidate_catches(e: &Engine, candidate: &pwrroute_engine::Candidate, url: &str) -> bool {
-    candidate.patterns.iter().any(|p| !e.collisions(p, &[url]).unwrap().is_empty())
+    candidate
+        .patterns
+        .iter()
+        .any(|p| !e.collisions(p, &[url]).unwrap().is_empty())
 }
 
 fn check_suggestions(e: &Engine, url: &str) -> proptest::test_runner::TestCaseResult {
@@ -580,25 +594,49 @@ fn check_suggestions(e: &Engine, url: &str) -> proptest::test_runner::TestCaseRe
     let suggestion = suggest_rule(url);
     prop_assert!(!suggestion.candidates.is_empty(), "{url}");
     for candidate in &suggestion.candidates {
-        prop_assert!(candidate_catches(e, candidate, url), "{:?} should match {url}", candidate.patterns);
+        prop_assert!(
+            candidate_catches(e, candidate, url),
+            "{:?} should match {url}",
+            candidate.patterns
+        );
         if parsed.query().is_some() || parsed.fragment().is_some() {
             let mut again = parsed.clone();
             again.set_query(Some("different=query"));
             again.set_fragment(Some("different"));
-            prop_assert!(candidate_catches(e, candidate, again.as_str()), "{:?} should match {again}", candidate.patterns);
+            prop_assert!(
+                candidate_catches(e, candidate, again.as_str()),
+                "{:?} should match {again}",
+                candidate.patterns
+            );
         }
         if let Some(domain) = &candidate.domain {
             // Preserve scheme, user and port: those are explicit constraints.
-            for host in [domain.clone(), format!("child.{domain}"), format!("a.b.{domain}")] {
+            for host in [
+                domain.clone(),
+                format!("child.{domain}"),
+                format!("a.b.{domain}"),
+            ] {
                 let mut probe = parsed.clone();
                 probe.set_host(Some(&host)).unwrap();
-                prop_assert!(candidate_catches(e, candidate, probe.as_str()), "{:?} misses {probe}", candidate.patterns);
+                prop_assert!(
+                    candidate_catches(e, candidate, probe.as_str()),
+                    "{:?} misses {probe}",
+                    candidate.patterns
+                );
             }
-            for host in [format!("not{domain}"), format!("{domain}.evil.net"), "evil.net".into()] {
+            for host in [
+                format!("not{domain}"),
+                format!("{domain}.evil.net"),
+                "evil.net".into(),
+            ] {
                 let mut probe = parsed.clone();
                 probe.set_host(Some(&host)).unwrap();
                 probe.set_path(&format!("/{domain}/"));
-                prop_assert!(!candidate_catches(e, candidate, probe.as_str()), "{:?} catches {probe}", candidate.patterns);
+                prop_assert!(
+                    !candidate_catches(e, candidate, probe.as_str()),
+                    "{:?} catches {probe}",
+                    candidate.patterns
+                );
             }
         }
     }
@@ -618,7 +656,12 @@ fn every_candidate_matches_its_own_link_by_finickys_is_match() {
 #[test]
 fn caret_paths_match_finickys_serialized_href() {
     let e = engine(None, RulesFile::default());
-    for url in ["https://site.com/a^b", "https://site.com//^", "myapp://h/a^b", "myapp://h/a^b/c?q=1"] {
+    for url in [
+        "https://site.com/a^b",
+        "https://site.com//^",
+        "myapp://h/a^b",
+        "myapp://h/a^b/c?q=1",
+    ] {
         check_suggestions(&e, url).unwrap();
     }
 }

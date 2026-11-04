@@ -186,14 +186,22 @@ pub fn suggest_rule(url: &str) -> Suggestion {
             .push(Candidate::one(format!("{origin}*"), why_host));
         return suggestion;
     }
-    let first = path.strip_prefix('/').unwrap_or(path).split('/').next().unwrap_or("");
+    let first = path
+        .strip_prefix('/')
+        .unwrap_or(path)
+        .split('/')
+        .next()
+        .unwrap_or("");
     if !first.is_empty() {
         let narrowest = if path.starts_with(&format!("/{first}/")) {
             Candidate::one(format!("{origin}/{}/*", escape(first)), why_section)
         } else if tail {
             // `host/first/*` needs a slash after the segment, which this
             // link does not have: the page, with any query.
-            Candidate::one(format!("{origin}{}", prefix_pattern(path)), WHY_PAGE_ANY_QUERY)
+            Candidate::one(
+                format!("{origin}{}", prefix_pattern(path)),
+                WHY_PAGE_ANY_QUERY,
+            )
         } else {
             // No slash after the segment and nothing after the path: the
             // link itself.

@@ -798,7 +798,9 @@ fn is_app_path(app: &str) -> bool {
     let parts: Vec<&str> = rest.split('/').collect();
     parts.len() >= 2
         && parts.iter().all(|p| !p.is_empty() && !p.contains('\n'))
-        && parts.last().is_some_and(|p| p.len() > 4 && p.ends_with(".app"))
+        && parts
+            .last()
+            .is_some_and(|p| p.len() > 4 && p.ends_with(".app"))
 }
 
 const EXAMPLE_URL: &str = "Examples must be full URLs, such as https://example.com/path.";
@@ -1082,21 +1084,38 @@ mod tests {
 
     #[test]
     fn generated_app_types_agree_with_finicky() {
-        use proptest::{prelude::*, test_runner::{Config, TestRunner}};
+        use proptest::{
+            prelude::*,
+            test_runner::{Config, TestRunner},
+        };
         let e = crate::Engine::from_sources(
-            &crate::Sources::default(), std::rc::Rc::new(crate::DefaultHost), crate::Limits::default(),
-        ).unwrap();
+            &crate::Sources::default(),
+            std::rc::Rc::new(crate::DefaultHost),
+            crate::Limits::default(),
+        )
+        .unwrap();
         let strings = prop_oneof![
             "[a-zA-Z0-9 .~/-]{0,30}",
-            ("~?", prop::collection::vec("[a-zA-Z0-9 .~\\n-]{0,6}", 1..5), "[a-zA-Z0-9 .-]{0,8}")
+            (
+                "~?",
+                prop::collection::vec("[a-zA-Z0-9 .~\\n-]{0,6}", 1..5),
+                "[a-zA-Z0-9 .-]{0,8}"
+            )
                 .prop_map(|(tilde, parts, name)| format!("{tilde}/{}/{name}.app", parts.join("/"))),
         ];
-        TestRunner::new(Config::with_cases(128)).run(&strings, |app| {
-            let quoted = serde_json::to_string(&app).unwrap();
-            let expected = e.evaluate("", &format!("finickyConfigAPI.autodetectAppStringType({quoted})")).unwrap();
-            prop_assert_eq!(app_type(&app), expected.as_str().unwrap(), "{:?}", app);
-            Ok(())
-        }).unwrap();
+        TestRunner::new(Config::with_cases(128))
+            .run(&strings, |app| {
+                let quoted = serde_json::to_string(&app).unwrap();
+                let expected = e
+                    .evaluate(
+                        "",
+                        &format!("finickyConfigAPI.autodetectAppStringType({quoted})"),
+                    )
+                    .unwrap();
+                prop_assert_eq!(app_type(&app), expected.as_str().unwrap(), "{:?}", app);
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
