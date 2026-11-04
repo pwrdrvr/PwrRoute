@@ -753,3 +753,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "property_tests/singleton.rs"]
+pub(crate) mod properties;

@@ -1141,3 +1141,7 @@ mod tests {
         assert!(link(input("not a url")).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "property_tests/tools.rs"]
+mod properties;

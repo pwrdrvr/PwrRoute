@@ -659,3 +659,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "property_tests/github_releases.rs"]
+mod properties;
