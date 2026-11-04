@@ -391,3 +391,110 @@ fn fixing_a_broken_import_reloads() {
     settle(&mut r).unwrap().unwrap();
     assert_eq!(browser(&r), "Arc");
 }
+
+
+// Model the Status promise using two independent sources. A broken source
+// already in the active engine freezes that entire engine. A never-loaded
+// source is omitted, allowing the other source's edits to keep routing.
+#[derive(Clone, Copy, Debug)]
+enum FileState {
+    Missing,
+    Broken,
+    Good(u8),
+}
+
+#[derive(Clone, Debug)]
+enum LoadCommand {
+    Config(FileState),
+    Rules(FileState),
+    Reload,
+}
+
+fn exercise_load_model(initial: (FileState, FileState), commands: &[LoadCommand]) -> proptest::test_runner::TestCaseResult {
+    use proptest::prelude::*;
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("finicky.js");
+    let rules_path = dir.path().join("rules.json");
+    let write = |path: &std::path::Path, state: FileState, is_config: bool| {
+        match state {
+            FileState::Missing => { let _ = fs::remove_file(path); }
+            FileState::Broken => fs::write(path, "{").unwrap(),
+            FileState::Good(version) => {
+                let text = if is_config {
+                    config(&format!("Config{version}"))
+                } else {
+                    format!(r#"{{"rules":[{{"match":"rules.example/*","browser":"Rules{version}"}}]}}"#)
+                };
+                fs::write(path, text).unwrap();
+            }
+        }
+    };
+    let (mut config_disk, mut rules_disk) = initial;
+    write(&config_path, config_disk, true);
+    write(&rules_path, rules_disk, false);
+    let mut real = None;
+    let mut active_config = None;
+    let mut active_rules = None;
+    let mut rules_loaded = false;
+    let mut generation = 0;
+    for command in std::iter::once(&LoadCommand::Reload).chain(commands) {
+        match *command {
+            LoadCommand::Config(state) => {
+                config_disk = state;
+                write(&config_path, state, true);
+                continue;
+            }
+            LoadCommand::Rules(state) => {
+                rules_disk = state;
+                write(&rules_path, state, false);
+                continue;
+            }
+            LoadCommand::Reload => {}
+        }
+        let config_error = matches!(config_disk, FileState::Broken)
+            || (matches!(config_disk, FileState::Missing) && active_config.is_some());
+        let rules_error = matches!(rules_disk, FileState::Broken);
+        let frozen = (config_error && active_config.is_some()) || (rules_error && rules_loaded);
+        // When both fail there is no usable source to build an engine with.
+        if !frozen && !(config_error && rules_error) {
+            active_config = match config_disk { FileState::Good(v) => Some(v), _ => None };
+            active_rules = match rules_disk { FileState::Good(v) => Some(v), _ => None };
+            rules_loaded = !rules_error;
+            generation += 1;
+        }
+        if let Some(r) = real.as_mut() {
+            let r: &mut Reloader = r;
+            prop_assert_eq!(r.reload().is_err(), config_error || rules_error);
+        } else {
+            real = Some(reloader(ConfigChoice::Discover(vec![config_path.clone()]), Some(rules_path.clone())));
+        }
+        let r = real.as_ref().unwrap();
+        prop_assert_eq!(r.status().error.is_some(), config_error || rules_error, "{initial:?}; {commands:?}");
+        prop_assert_eq!(r.status().generation, generation, "{initial:?}; {commands:?}");
+        prop_assert_eq!(r.status().config.is_some(), active_config.is_some());
+        prop_assert_eq!(r.status().rules.is_some(), rules_loaded);
+        let default = active_config.map_or_else(|| FALLBACK_BROWSER.to_owned(), |v| format!("Config{v}"));
+        prop_assert_eq!(browser(r), default.clone(), "{initial:?}; {commands:?}");
+        let routed = r.engine().resolve("https://rules.example/a", None).unwrap().browser.name;
+        prop_assert_eq!(routed, active_rules.map_or(default, |v| format!("Rules{v}")), "{initial:?}; {commands:?}");
+    }
+    Ok(())
+}
+
+#[test]
+fn reloads_follow_the_two_source_last_working_engine_model() {
+    use proptest::{prelude::*, test_runner::{Config, TestRunner}};
+    let state = || prop_oneof![Just(FileState::Missing), Just(FileState::Broken), (0..3u8).prop_map(FileState::Good)];
+    let command = prop_oneof![state().prop_map(LoadCommand::Config), state().prop_map(LoadCommand::Rules), Just(LoadCommand::Reload)];
+    let inputs = ((state(), state()), prop::collection::vec(command, 0..12));
+    TestRunner::new(Config::with_cases(32)).run(&inputs, |(initial, commands)| exercise_load_model(initial, &commands)).unwrap();
+}
+
+#[test]
+fn never_loaded_broken_rules_leave_the_config_in_charge() {
+    exercise_load_model((FileState::Good(0), FileState::Broken), &[
+        LoadCommand::Config(FileState::Good(1)), LoadCommand::Reload,
+        LoadCommand::Rules(FileState::Good(0)), LoadCommand::Reload,
+        LoadCommand::Rules(FileState::Broken), LoadCommand::Config(FileState::Good(2)), LoadCommand::Reload,
+    ]).unwrap();
+}

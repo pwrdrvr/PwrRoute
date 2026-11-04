@@ -1073,6 +1073,30 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_app_extension_is_an_app_name() {
+        assert_eq!(app_type("/a/.app"), "appName");
+    }
+
+    #[test]
+    fn generated_app_types_agree_with_finicky() {
+        use proptest::{prelude::*, test_runner::{Config, TestRunner}};
+        let e = crate::Engine::from_sources(
+            &crate::Sources::default(), std::rc::Rc::new(crate::DefaultHost), crate::Limits::default(),
+        ).unwrap();
+        let strings = prop_oneof![
+            "[a-zA-Z0-9 .~/-]{0,30}",
+            ("~?", prop::collection::vec("[a-zA-Z0-9 .~\\n-]{0,6}", 1..5), "[a-zA-Z0-9 .-]{0,8}")
+                .prop_map(|(tilde, parts, name)| format!("{tilde}/{}/{name}.app", parts.join("/"))),
+        ];
+        TestRunner::new(Config::with_cases(128)).run(&strings, |app| {
+            let quoted = serde_json::to_string(&app).unwrap();
+            let expected = e.evaluate("", &format!("finickyConfigAPI.autodetectAppStringType({quoted})")).unwrap();
+            prop_assert_eq!(app_type(&app), expected.as_str().unwrap(), "{:?}", app);
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
     fn app_type_matches_finickys_autodetect() {
         for (app, expected) in [
             ("Safari", "appName"),

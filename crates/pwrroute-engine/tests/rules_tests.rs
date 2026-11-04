@@ -541,48 +541,101 @@ fn privacy_fields_round_trip_through_the_file_and_stay_absent_when_unused() {
 
 // Suggesting a rule
 
-#[test]
-fn every_candidate_matches_its_own_link_by_finickys_is_match() {
-    let e = engine(None, RulesFile::default());
-    for url in [
-        "https://github.com/pwrdrvr/PwrRoute/pull/1",
-        "https://github.com/pwrdrvr?tab=repositories",
-        "https://example.com",
-        "http://localhost:3000/app/x?y=1#z",
-        "vscode://file/Users/x/y.rs",
-        "slack://channel?id=1",
-        "mailto:alice@example.com",
-        "https://a.example/q*",
-        "https://issues.example/12345/comments",
-        "https://user@host.example/a/b",
-        "https://user@host.example/",
-        "https://user:s3cret@host.example/a",
-        "https://user:s3cret@host.example/a/b?q=1#f",
-        "http://user:s3cret@localhost:3000/x",
-        "https://user:s3cret@host.example/a?q=1#f",
-        "https://auth.example.com/authorize?client_id=demo&state=one",
-        "https://example.com/page#top",
-        "mailto:alice@example.com?subject=hi",
-        "https://dash.example.com/somefolder/page",
-        "https://eu.api.example.co.uk/v2/status",
-        "https://someone.github.io/blog/post",
-        "https://dash.example.com:8443/a/b",
-        "https://user@dash.example.com/a/b",
-    ] {
-        let suggestion = suggest_rule(url);
-        assert!(!suggestion.candidates.is_empty(), "{url}");
-        for candidate in &suggestion.candidates {
-            // A rule's patterns: any one matching is a match.
-            let caught = candidate
-                .patterns
-                .iter()
-                .any(|p| !e.collisions(p, &[url]).unwrap().is_empty());
-            assert!(caught, "{:?} should match {url}", candidate.patterns);
-            for pattern in &candidate.patterns {
-                assert!(!pattern.contains("s3cret"), "{pattern} carries a password");
+// Build URLs from parts, including opaque and custom schemes, credentials,
+// empty segments and characters whose serialization differs across URL parsers.
+fn suggestion_links() -> impl proptest::strategy::Strategy<Value = String> {
+    use proptest::prelude::*;
+    let segment = prop::collection::vec(
+        prop::sample::select(vec!["a", "0", "^", "*", "\\", "%5E", "%", " ", "é", "{", "}", "`", ":", "@", "[", "]"]),
+        0..5,
+    ).prop_map(|parts| parts.concat());
+    let path = prop::collection::vec(segment, 0..5).prop_map(|parts| parts.join("/"));
+    (
+        prop::sample::select(vec!["https", "http", "ftp", "myapp", "mailto", "data"]),
+        prop::sample::select(vec!["", "a@", "a:0@", ":0@"]),
+        prop::sample::select(vec!["site.com", "a.example.com", "a.b.example.co.uk", "localhost", "127.0.0.1", "[::1]"]),
+        prop::sample::select(vec!["", ":8443"]),
+        path,
+        prop::sample::select(vec!["", "?q=a", "#top", "?q=^*#x"]),
+    ).prop_map(|(scheme, user, host, port, path, tail)| {
+        if matches!(scheme, "mailto" | "data") {
+            format!("{scheme}:{path}{tail}")
+        } else {
+            format!("{scheme}://{user}{host}{port}/{path}{tail}")
+        }
+    })
+}
+
+fn candidate_catches(e: &Engine, candidate: &pwrroute_engine::Candidate, url: &str) -> bool {
+    candidate.patterns.iter().any(|p| !e.collisions(p, &[url]).unwrap().is_empty())
+}
+
+fn check_suggestions(e: &Engine, url: &str) -> proptest::test_runner::TestCaseResult {
+    use proptest::prelude::*;
+    let parsed = url::Url::parse(url).unwrap();
+    let suggestion = suggest_rule(url);
+    prop_assert!(!suggestion.candidates.is_empty(), "{url}");
+    for candidate in &suggestion.candidates {
+        prop_assert!(candidate_catches(e, candidate, url), "{:?} should match {url}", candidate.patterns);
+        if parsed.query().is_some() || parsed.fragment().is_some() {
+            let mut again = parsed.clone();
+            again.set_query(Some("different=query"));
+            again.set_fragment(Some("different"));
+            prop_assert!(candidate_catches(e, candidate, again.as_str()), "{:?} should match {again}", candidate.patterns);
+        }
+        if let Some(domain) = &candidate.domain {
+            // Preserve scheme, user and port: those are explicit constraints.
+            for host in [domain.clone(), format!("child.{domain}"), format!("a.b.{domain}")] {
+                let mut probe = parsed.clone();
+                probe.set_host(Some(&host)).unwrap();
+                prop_assert!(candidate_catches(e, candidate, probe.as_str()), "{:?} misses {probe}", candidate.patterns);
+            }
+            for host in [format!("not{domain}"), format!("{domain}.evil.net"), "evil.net".into()] {
+                let mut probe = parsed.clone();
+                probe.set_host(Some(&host)).unwrap();
+                probe.set_path(&format!("/{domain}/"));
+                prop_assert!(!candidate_catches(e, candidate, probe.as_str()), "{:?} catches {probe}", candidate.patterns);
             }
         }
     }
+    Ok(())
+}
+
+#[test]
+fn every_candidate_matches_its_own_link_by_finickys_is_match() {
+    use proptest::test_runner::{Config, TestRunner};
+    // One QuickJS engine for the entire property, including shrinking.
+    let e = engine(None, RulesFile::default());
+    TestRunner::new(Config::with_cases(96))
+        .run(&suggestion_links(), |url| check_suggestions(&e, &url))
+        .unwrap();
+}
+
+#[test]
+fn caret_paths_match_finickys_serialized_href() {
+    let e = engine(None, RulesFile::default());
+    for url in ["https://site.com/a^b", "myapp://h/a^b", "myapp://h/a^b/c?q=1"] {
+        check_suggestions(&e, url).unwrap();
+    }
+}
+
+#[test]
+fn opaque_backslash_before_a_query_does_not_escape_the_wildcard() {
+    check_suggestions(&engine(None, RulesFile::default()), "mailto:\\#").unwrap();
+}
+
+#[test]
+fn trailing_double_slash_with_a_password_or_literal_star_matches() {
+    let e = engine(None, RulesFile::default());
+    for url in ["https://a:0@site.com//a//", "https://site.com//*//"] {
+        check_suggestions(&e, url).unwrap();
+    }
+}
+
+#[test]
+fn empty_first_path_segment_is_not_a_later_section() {
+    let suggestion = suggest_rule("https://site.com//a//");
+    assert_eq!(suggestion.candidates[0].patterns, ["site.com/*"]);
 }
 
 #[test]
