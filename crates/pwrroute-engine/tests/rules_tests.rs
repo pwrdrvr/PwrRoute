@@ -614,7 +614,7 @@ fn every_candidate_matches_its_own_link_by_finickys_is_match() {
 #[test]
 fn caret_paths_match_finickys_serialized_href() {
     let e = engine(None, RulesFile::default());
-    for url in ["https://site.com/a^b", "myapp://h/a^b", "myapp://h/a^b/c?q=1"] {
+    for url in ["https://site.com/a^b", "https://site.com//^", "myapp://h/a^b", "myapp://h/a^b/c?q=1"] {
         check_suggestions(&e, url).unwrap();
     }
 }
@@ -622,6 +622,11 @@ fn caret_paths_match_finickys_serialized_href() {
 #[test]
 fn opaque_backslash_before_a_query_does_not_escape_the_wildcard() {
     check_suggestions(&engine(None, RulesFile::default()), "mailto:\\#").unwrap();
+}
+
+#[test]
+fn empty_username_with_a_password_matches() {
+    check_suggestions(&engine(None, RulesFile::default()), "https://:0@site.com/a").unwrap();
 }
 
 #[test]

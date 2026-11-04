@@ -798,7 +798,7 @@ fn is_app_path(app: &str) -> bool {
     let parts: Vec<&str> = rest.split('/').collect();
     parts.len() >= 2
         && parts.iter().all(|p| !p.is_empty() && !p.contains('\n'))
-        && parts.last().is_some_and(|p| p.ends_with(".app"))
+        && parts.last().is_some_and(|p| p.len() > 4 && p.ends_with(".app"))
 }
 
 const EXAMPLE_URL: &str = "Examples must be full URLs, such as https://example.com/path.";
@@ -1075,6 +1075,7 @@ mod tests {
     #[test]
     fn a_bare_app_extension_is_an_app_name() {
         assert_eq!(app_type("/a/.app"), "appName");
+        assert_eq!(app_type("/A/.app"), "appName");
     }
 
     #[test]
