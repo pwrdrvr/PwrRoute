@@ -451,3 +451,17 @@ fn an_external_download_keeps_its_parent_after_the_cloud_copy_disappears() {
     }
     w.converge();
 }
+
+#[test]
+fn a_missing_cloud_copy_cannot_turn_an_old_base_into_a_new_revision() {
+    let w = World::new();
+    for c in [
+        Command::Edit(1),
+        Command::Sync(1),
+        Command::CloudDelete,
+        Command::Sync(0),
+    ] {
+        w.run(c);
+    }
+    w.converge();
+}

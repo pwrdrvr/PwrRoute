@@ -482,6 +482,12 @@ impl Syncer {
 
         match decision {
             Decision::Nothing => Health::Absent,
+            Decision::RemoteMissing => Health::Error(format!(
+                "The cloud copy of {} in {} is missing. This machine will not restore an \
+                 unchanged copy. Restore the folder's last version from a backup, \
+                 or edit a machine that synced that version to restore it.",
+                item.name, target.label
+            )),
             Decision::InSync => {
                 if let Some(sha) = &local_sha {
                     self.state.set_base(&id, &item.name, sha);
@@ -489,6 +495,23 @@ impl Syncer {
                 Health::InSync
             }
             Decision::Push => {
+                // A missing file is not proof the folder is new. Only restore
+                // an edit based on its last recorded version. Another machine
+                // may have advanced the manifest since this one's last pass.
+                let recorded = manifest.as_ref().and_then(|m| m.files.get(&item.name));
+                if remote.is_none()
+                    && (base.is_some() || recorded.is_some())
+                    && !base
+                        .as_deref()
+                        .is_some_and(|b| listed(manifest.as_ref(), &item.name, b))
+                {
+                    return Health::Error(format!(
+                        "The cloud copy of {} in {} is missing, and this machine has not \
+                         synced its last recorded version. Restore the folder's copy from a \
+                         backup or from a machine that synced that version.",
+                        item.name, target.label
+                    ));
+                }
                 let Some(bytes) = local else {
                     return Health::Absent;
                 };

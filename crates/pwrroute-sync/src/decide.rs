@@ -6,7 +6,9 @@
 //!
 //! | Local | Folder | Decision |
 //! | --- | --- | --- |
-//! | any | not there | [`Decision::Push`], or [`Decision::Nothing`] without a local file |
+//! | no base, or locally edited | not there | [`Decision::Push`] (restores require manifest validation) |
+//! | unchanged since the base | not there | [`Decision::RemoteMissing`] |
+//! | no file | not there | [`Decision::Nothing`] |
 //! | same as the folder | | [`Decision::InSync`] |
 //! | no file | there | [`Decision::Pull`]: a sync never deletes |
 //! | blank (no rules), never synced or unchanged since | changed | [`Decision::Pull`] |
@@ -43,6 +45,8 @@ pub enum Decision {
     Nothing,
     /// Both sides hold the same bytes; that hash becomes the base.
     InSync,
+    /// The cloud copy disappeared; an unchanged base must not re-seed it.
+    RemoteMissing,
     /// Copy the local file to the folder.
     Push,
     /// Copy the folder's file over the local one.
@@ -56,6 +60,7 @@ pub fn decide(local: Local<'_>, remote: Option<&str>, base: Option<&str>) -> Dec
     let Some(remote) = remote else {
         return match local {
             Local::Missing => Decision::Nothing,
+            Local::Blank(h) | Local::Present(h) if base == Some(h) => Decision::RemoteMissing,
             _ => Decision::Push,
         };
     };
@@ -89,14 +94,16 @@ mod tests {
     use Local::*;
 
     #[test]
-    fn nothing_in_the_folder_is_a_push() {
+    fn only_new_or_edited_content_can_fill_a_missing_cloud_copy() {
         assert_eq!(decide(Present("a"), None, None), Push);
         assert_eq!(
             decide(Present("a"), None, Some("a")),
-            Push,
-            "folder deleted"
+            RemoteMissing,
+            "an unchanged base is not a new revision"
         );
         assert_eq!(decide(Blank("e"), None, None), Push);
+        assert_eq!(decide(Blank("e"), None, Some("e")), RemoteMissing);
+        assert_eq!(decide(Present("b"), None, Some("a")), Push);
         assert_eq!(decide(Missing, None, None), Nothing);
         assert_eq!(decide(Missing, None, Some("a")), Nothing);
     }

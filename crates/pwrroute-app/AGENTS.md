@@ -279,10 +279,11 @@ their own modules.
   Keep editing (Return, Esc), and `answer_leave` goes on. The foot sits
   under the scrolling fields, never below the fold. A reload, an import or
   Undo import carries the draft onto the new file (`RulesStore::rebase`):
-  onto its rule, or as `Conflict::Changed` (same place, same length, same
-  neighbors) or `Removed` (kept as a rule of its own, never over another)
-  with a banner when the other writer changed or removed that rule. The Overview draws `routed()`, the rules as
-  the router has them. Quit does not ask.
+  onto its unchanged rule, or as `Conflict::Changed` (same place, same length,
+  same neighbors) or `Removed`. In either conflict it is a separate draft:
+  Save adds it without replacing the file's rule; Discard keeps the file's.
+  A banner explains what changed and what Save will do. The Overview draws
+  `routed()`, the rules as the router has them. Quit does not ask.
 - **The Rules screen follows `rules.json`'s other writers.** The store
   (`rules_store.rs`) stamps the bytes it last read or wrote, and
   `RulesStore::check_disk` compares the file to them: changed with nothing

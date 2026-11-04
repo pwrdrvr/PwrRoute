@@ -705,3 +705,57 @@ fn a_pull_writes_through_a_symlinked_local_file() {
     );
     assert_eq!(fs::read(&real).unwrap(), studio.local());
 }
+
+#[test]
+fn missing_cloud_copy_is_visible_and_only_an_edit_of_its_last_version_restores_it() {
+    let cloud = cloud();
+    let mut a = Mac::new("A", &[cloud.path()]);
+    let mut b = Mac::new("B", &[cloud.path()]);
+    a.save(&rules(&["base.example/*"]));
+    a.pass(1);
+    b.pass(2);
+    a.save(&rules(&["newer.example/*"]));
+    a.pass(3);
+    let newer = a.local();
+    fs::remove_file(Folder::new(cloud.path()).file(RULES)).unwrap();
+    assert!(matches!(b.health(4, 0), Health::Error(e) if e.contains("missing")));
+    assert!(matches!(a.health(5, 0), Health::Error(e) if e.contains("missing")));
+    assert_eq!(a.local(), newer);
+    assert!(!Folder::new(cloud.path()).file(RULES).exists());
+
+    // Editing the stale machine is still unsafe: it has never read newer.
+    b.save(&rules(&["stale-branch.example/*"]));
+    assert!(matches!(b.health(6, 0), Health::Error(e) if e.contains("last recorded version")));
+    assert!(!Folder::new(cloud.path()).file(RULES).exists());
+
+    a.save(&rules(&["newer.example/*", "restored.example/*"]));
+    assert_eq!(a.health(7, 0), Health::Pushed);
+    assert_eq!(remote(cloud.path()), a.local());
+    assert!(matches!(b.health(8, 0), Health::Conflict(_)));
+}
+
+#[test]
+fn an_existing_base_without_a_manifest_cannot_reseed_a_deleted_cloud_copy() {
+    let cloud = cloud();
+    let mut a = Mac::new("A", &[cloud.path()]);
+    a.save(&rules(&["base.example/*"]));
+    a.pass(1);
+    fs::remove_file(Folder::new(cloud.path()).file(RULES)).unwrap();
+    fs::remove_file(Folder::new(cloud.path()).dir().join(MANIFEST)).unwrap();
+    a.save(&rules(&["edited.example/*"]));
+    assert!(matches!(a.health(2, 0), Health::Error(e) if e.contains("missing")));
+    assert!(!Folder::new(cloud.path()).file(RULES).exists());
+}
+
+#[test]
+fn a_new_machine_cannot_reseed_a_missing_file_over_an_existing_manifest() {
+    let cloud = cloud();
+    let mut a = Mac::new("A", &[cloud.path()]);
+    a.save(&rules(&["newer.example/*"]));
+    a.pass(1);
+    fs::remove_file(Folder::new(cloud.path()).file(RULES)).unwrap();
+    let mut joining = Mac::new("Joining", &[cloud.path()]);
+    joining.save(&rules(&["old.example/*"]));
+    assert!(matches!(joining.health(2, 0), Health::Error(e) if e.contains("missing")));
+    assert!(!Folder::new(cloud.path()).file(RULES).exists());
+}
