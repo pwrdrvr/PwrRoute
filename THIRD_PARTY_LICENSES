@@ -10061,7 +10061,7 @@ MIT License (190)
 - xim-parser@0.2.2 | https://github.com/Riey/xim-rs
 - objc@0.2.7 | http://github.com/SSheldon/rust-objc
 - tokio-util@0.7.20 | https://github.com/tokio-rs/tokio
-- tokio@1.53.3 | https://github.com/tokio-rs/tokio
+- tokio@1.54.1 | https://github.com/tokio-rs/tokio
 - simd-adler32@0.3.10 | https://github.com/mcountryman/simd-adler32
 - imagesize@0.14.0 | https://github.com/Roughsketch/imagesize
 - cow-utils@0.1.3 | https://github.com/RReverser/cow-utils-rs
@@ -24359,7 +24359,7 @@ MIT License (MIT)
 
 Applies to:
 - tokio-util@0.7.20
-- tokio@1.53.3
+- tokio@1.54.1
 
 MIT License
 
