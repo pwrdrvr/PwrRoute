@@ -469,14 +469,14 @@ fn exercise_load_model(initial: (FileState, FileState), commands: &[LoadCommand]
             real = Some(reloader(ConfigChoice::Discover(vec![config_path.clone()]), Some(rules_path.clone())));
         }
         let r = real.as_ref().unwrap();
-        prop_assert_eq!(r.status().error.is_some(), config_error || rules_error, "{initial:?}; {commands:?}");
-        prop_assert_eq!(r.status().generation, generation, "{initial:?}; {commands:?}");
+        prop_assert_eq!(r.status().error.is_some(), config_error || rules_error, "{:?}; {:?}", initial, commands);
+        prop_assert_eq!(r.status().generation, generation, "{:?}; {:?}", initial, commands);
         prop_assert_eq!(r.status().config.is_some(), active_config.is_some());
         prop_assert_eq!(r.status().rules.is_some(), rules_loaded);
         let default = active_config.map_or_else(|| FALLBACK_BROWSER.to_owned(), |v| format!("Config{v}"));
-        prop_assert_eq!(browser(r), default.clone(), "{initial:?}; {commands:?}");
+        prop_assert_eq!(browser(r), default.clone(), "{:?}; {:?}", initial, commands);
         let routed = r.engine().resolve("https://rules.example/a", None).unwrap().browser.name;
-        prop_assert_eq!(routed, active_rules.map_or(default, |v| format!("Rules{v}")), "{initial:?}; {commands:?}");
+        prop_assert_eq!(routed, active_rules.map_or(default, |v| format!("Rules{v}")), "{:?}; {:?}", initial, commands);
     }
     Ok(())
 }
