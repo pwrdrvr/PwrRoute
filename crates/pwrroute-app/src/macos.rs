@@ -569,4 +569,80 @@ mod tests {
         // The bottom edge belongs to the display below, if any.
         assert!(!in_frame(built_in, (100.0, 0.0)));
     }
+
+    /// Screens are placed in AppKit points; only the tray-icon boundary
+    /// converts the item's rect to physical pixels using its OWN display.
+    fn layouts() -> impl proptest::strategy::Strategy<Value = Vec<ScreenRects>> {
+        use proptest::prelude::*;
+        let screen = (900u32..2600, 700u32..1500, any::<bool>(), 24u32..=37, any::<bool>());
+        (prop::collection::vec(screen, 1..=3), 0usize..4).prop_map(|(specs, direction)| {
+            let mut screens = Vec::new();
+            for (i, (w, h, retina, mb, dock)) in specs.into_iter().enumerate() {
+                let (w, h, mb) = (f64::from(w), f64::from(h), f64::from(mb));
+                let (x, y) = if let Some(previous) = screens.last() {
+                    let previous: &ScreenRects = previous;
+                    let f = previous.frame;
+                    match direction {
+                        0 => (f.origin.x + f.size.width, f.origin.y + f.size.height - h),
+                        1 => (f.origin.x - w, f.origin.y + f.size.height - h),
+                        2 => (f.origin.x, f.origin.y + f.size.height),
+                        _ => (f.origin.x, f.origin.y - h),
+                    }
+                } else { (0.0, 0.0) };
+                let dock = if dock { 70.0 } else { 0.0 };
+                screens.push(ScreenRects {
+                    display: DisplayId::new(i as u64 + 1),
+                    frame: rect(x, y, w, h),
+                    visible: rect(x, y + dock, w, h - mb - dock),
+                    scale: if retina { 2.0 } else { 1.0 },
+                });
+            }
+            screens
+        })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            failure_persistence: None,
+            ..proptest::test_runner::Config::default()
+        })]
+        #[test]
+        fn dropdown_follows_the_pressed_display(
+            screens in layouts(), chosen in 0usize..3, fraction in 0u32..=1000,
+            shape in 0u8..3,
+        ) {
+            use proptest::prelude::*;
+            let target = &screens[chosen % screens.len()];
+            let frame = target.frame;
+            let mb = menu_bar_height(target);
+            // Keep the entire item clear of the dropdown's 4pt edge margin.
+            let x = 8.0 + f64::from(fraction) / 1000.0 * (frame.size.width - 46.0);
+            let center = x + 15.0;
+            let overhang = if shape == 1 { 1.0 } else { 0.0 };
+            let primary_height = screens[0].frame.size.height;
+            let top = primary_height - frame.origin.y - frame.size.height;
+            let (position, item_size) = if shape == 2 {
+                ((0.0, primary_height * screens[0].scale), (0.0, 0.0))
+            } else {
+                (((frame.origin.x + x) * target.scale, (top - overhang) * target.scale),
+                 (30.0 * target.scale, (mb + 2.0 * overhang) * target.scale))
+            };
+            let on_item = (frame.origin.x + center, frame.origin.y + frame.size.height - mb / 2.0);
+            let elsewhere = (screens[0].frame.size.width / 2.0, screens[0].frame.size.height / 2.0);
+            for pointer in [None, Some(on_item), Some(elsewhere)] {
+                // A 0x0 rect contains no display or x information. Without
+                // a menu-bar press the documented fallback is primary/right.
+                let (expected, expected_x) = if shape == 2 && pointer != Some(on_item) {
+                    (&screens[0], screens[0].frame.size.width - 8.0)
+                } else { (target, center) };
+                let anchor = anchor_on(&screens, position, item_size, pointer).unwrap();
+                let origin = dropdown_origin(&anchor, px(300.0));
+                prop_assert_eq!(anchor.display, expected.display, "pointer {:?}; origin {:?}", pointer, origin);
+                let menu_bar = px(menu_bar_height(expected) as f32);
+                prop_assert!(origin.y >= menu_bar && origin.y <= menu_bar + px(10.0), "origin {:?}, menu bar {:?}", origin, menu_bar);
+                prop_assert!(origin.x <= px(expected_x as f32) && px(expected_x as f32) <= origin.x + px(300.0));
+            }
+        }
+    }
+
 }

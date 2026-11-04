@@ -993,4 +993,63 @@ mod tests {
         assert_eq!(ago(noon, 17), noon - Duration::from_secs(17));
         assert_eq!(chrono::DateTime::<Local>::from(ago(noon, 17)).hour(), 11);
     }
+
+    // Local caches the process's timezone. Each zone gets a fresh test
+    // process instead of mutating TZ underneath other concurrent tests.
+    fn in_zone(test: &str, zone: &str) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env("TZ", zone)
+            .env("PWRROUTE_FIXTURE_TZ_CHILD", "1")
+            .output().unwrap();
+        assert!(output.status.success(), "{zone}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn fixture_offsets_stay_today_and_ordered_in_every_zone() {
+        use proptest::prelude::*;
+        if std::env::var_os("PWRROUTE_FIXTURE_TZ_CHILD").is_none() {
+            for zone in ["UTC", "America/New_York", "Asia/Tokyo", "America/Santiago",
+                "Asia/Beirut", "America/Havana", "Africa/Cairo"] {
+                in_zone("fixtures::tests::fixture_offsets_stay_today_and_ordered_in_every_zone", zone);
+            }
+            return;
+        }
+        let mut starts = Vec::new();
+        let mut gaps = Vec::new();
+        let first = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        for d in 0..730 {
+            let date = first + chrono::Days::new(d);
+            // Independent generator: walk local minutes to the first valid
+            // one. This includes dates whose 00:00 never happened.
+            let start = (0..1440).find_map(|m| Local.from_local_datetime(
+                &date.and_hms_opt(m / 60, m % 60, 0).unwrap()).earliest()).unwrap();
+            if start.hour() != 0 { gaps.push(SystemTime::from(start)); }
+            starts.push(SystemTime::from(start));
+        }
+        let boundary = (prop::sample::select(starts), 0u64..=1200)
+            .prop_map(|(start, elapsed)| start + Duration::from_secs(elapsed));
+        let uniform = (946684800u64..4102444800)
+            .prop_map(|s| SystemTime::UNIX_EPOCH + Duration::from_secs(s));
+        let now = if gaps.is_empty() {
+            prop_oneof![uniform, boundary].boxed()
+        } else {
+            let dst = (prop::sample::select(gaps), 0u64..=1200)
+                .prop_map(|(start, elapsed)| start + Duration::from_secs(elapsed));
+            prop_oneof![1 => uniform, 1 => boundary, 4 => dst].boxed()
+        };
+        let mut runner = proptest::test_runner::TestRunner::new(proptest::test_runner::Config {
+            failure_persistence: None,
+            ..proptest::test_runner::Config::default()
+        });
+        runner.run(&(now, 0u64..=1200, 0u64..=1200), |(now, a, b)| {
+            let newer = ago(now, a.min(b));
+            let older = ago(now, a.max(b));
+            prop_assert_eq!(chrono::DateTime::<Local>::from(older).date_naive(), chrono::DateTime::<Local>::from(now).date_naive());
+            prop_assert!(now >= newer && newer >= older);
+            Ok(())
+        }).unwrap();
+    }
+
 }
