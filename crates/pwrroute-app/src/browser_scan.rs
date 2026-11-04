@@ -7,7 +7,7 @@
 //! names, from `pwrroute_browsers`, and whether the OS kept a profile list
 //! from it (`DetectedApp::profiles_blocked`). Nothing here holds a URL.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, rc::Rc};
 
 use gpui_kit::{App, BorrowAppContext as _, Global};
 use pwrroute_browsers::{Env, detect_installed, read_profiles};
@@ -99,18 +99,52 @@ pub fn scan(env: &Env) -> Vec<DetectedApp> {
     apps
 }
 
+type ScanCallback = Rc<dyn Fn(&mut App)>;
+#[cfg(test)]
+pub(crate) type ScanProducer = std::sync::Arc<
+    dyn Fn() -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Vec<DetectedApp>, String>> + Send>,
+        > + Send
+        + Sync,
+>;
+
 /// The scan, once it has run, and the machine it reads.
 struct ScanGlobal {
     env: Env,
     apps: Option<Vec<DetectedApp>>,
+    error: Option<String>,
+    running: bool,
+    again: bool,
+    callbacks: Vec<ScanCallback>,
+    #[cfg(test)]
+    producer: Option<ScanProducer>,
 }
 
 impl Global for ScanGlobal {}
 
 /// Makes `env` the machine the scan reads. Nothing is read until
-/// [`apps`] is first asked.
+/// [`apps`] is first asked; that call starts background work and returns
+/// the last completed snapshot immediately.
 pub fn install(env: Env, cx: &mut App) {
-    cx.set_global(ScanGlobal { env, apps: None });
+    cx.set_global(ScanGlobal {
+        env,
+        apps: None,
+        error: None,
+        running: false,
+        again: false,
+        callbacks: Vec::new(),
+        #[cfg(test)]
+        producer: None,
+    });
+    on_complete(
+        cx,
+        Rc::new(|cx| {
+            refresh_windows(cx);
+            crate::tray::refresh_browsers(cx);
+            crate::settings::reload(cx, crate::settings::Pane::Configuration);
+            crate::settings::reload(cx, crate::settings::Pane::Sync);
+        }),
+    );
 }
 
 /// A scan a test or screenshot supplies, in place of reading the machine.
@@ -119,19 +153,107 @@ pub fn install_fixture(apps: Vec<DetectedApp>, cx: &mut App) {
     cx.set_global(ScanGlobal {
         env: Env::fixture(pwrroute_browsers::Platform::current(), std::env::temp_dir()),
         apps: Some(apps),
+        error: None,
+        running: false,
+        again: false,
+        callbacks: Vec::new(),
+        producer: None,
     });
 }
 
-/// The browsers on this machine, scanned the first time this is called.
-/// Before [`install`] (the window harness) the real machine is read each
-/// time, as the pickers always did.
+/// Replace only the worker for channel-controlled lifecycle tests. Install a
+/// fixture environment or cached apps first; setting this never starts a scan.
+#[cfg(test)]
+pub(crate) fn set_test_producer(cx: &mut App, producer: ScanProducer) {
+    cx.update_global(|scan: &mut ScanGlobal, _| scan.producer = Some(producer));
+}
+
+/// The last completed scan, starting the initial scan if needed. Before
+/// completion, callers use `is_loading` instead of treating empty as no apps.
+/// Without installation (the window harness), no machine is read.
 pub fn apps(cx: &mut App) -> Vec<DetectedApp> {
     if !cx.has_global::<ScanGlobal>() {
-        return scan(&environment());
+        return Vec::new();
     }
-    cx.update_global(|global: &mut ScanGlobal, _| {
-        global.apps.get_or_insert_with(|| scan(&global.env)).clone()
+    if !has_run(cx) && error(cx).is_none() {
+        start(cx, false);
+    }
+    cx.global::<ScanGlobal>().apps.clone().unwrap_or_default()
+}
+
+pub fn error(cx: &App) -> Option<String> {
+    cx.try_global::<ScanGlobal>()
+        .and_then(|scan| scan.error.clone())
+}
+
+pub fn is_loading(cx: &App) -> bool {
+    cx.try_global::<ScanGlobal>()
+        .is_some_and(|scan| scan.running)
+}
+
+/// Register once per consumer, during installation. Called on GPUI after each
+/// completed scan, including failures (see `error`) and the initial one;
+/// never from the scanning thread.
+pub fn on_complete(cx: &mut App, callback: ScanCallback) {
+    if !cx.has_global::<ScanGlobal>() {
+        install(environment(), cx);
+    }
+    cx.update_global(|scan: &mut ScanGlobal, _| scan.callbacks.push(callback));
+}
+
+fn start(cx: &mut App, force: bool) {
+    let Some(scan) = cx.try_global::<ScanGlobal>() else {
+        return;
+    };
+    if scan.running {
+        if force {
+            cx.update_global(|scan: &mut ScanGlobal, _| scan.again = true);
+        }
+        return;
+    }
+    if !force && scan.apps.is_some() {
+        return;
+    }
+    let env = scan.env.clone();
+    #[cfg(test)]
+    let producer = scan.producer.clone();
+    cx.update_global(|scan: &mut ScanGlobal, _| {
+        scan.running = true;
+        scan.error = None;
+    });
+    let work = cx.background_executor().spawn(async move {
+        #[cfg(test)]
+        if let Some(producer) = producer {
+            return producer().await;
+        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self::scan(&env)))
+            .map_err(|_| "Could not scan browsers. Try again.".to_owned())
+    });
+    cx.spawn(async move |cx| {
+        let apps = work.await;
+        cx.update(|cx| {
+            let (again, callbacks) = cx.update_global(|scan: &mut ScanGlobal, _| {
+                scan.running = false;
+                let again = std::mem::take(&mut scan.again);
+                if !again {
+                    match apps {
+                        Ok(apps) => scan.apps = Some(apps),
+                        Err(error) => scan.error = Some(error),
+                    }
+                }
+                (again, scan.callbacks.clone())
+            });
+            if again {
+                start(cx, true);
+                return;
+            }
+            crate::settings::reload(cx, crate::settings::Pane::Browsers);
+            for callback in callbacks {
+                callback(cx);
+            }
+        });
     })
+    .detach();
 }
 
 /// Whether the scan has run, so [`location_of`] can answer.
@@ -151,7 +273,8 @@ pub fn location_of(value: &str, cx: &App) -> Option<PathBuf> {
         .map(|app| app.location.clone())
 }
 
-/// Reads the machine again: Settings' Rescan and first run's Look again.
+/// Requests another scan and returns the cached snapshot immediately.
+/// Concurrent rescans coalesce; completion refreshes consumers on GPUI.
 /// The apps' icons are read again too.
 pub fn rescan(cx: &mut App) -> Vec<DetectedApp> {
     crate::app_icons::forget(cx);
@@ -162,14 +285,10 @@ pub fn rescan(cx: &mut App) -> Vec<DetectedApp> {
 /// re-reads each time its window comes to the front: the same scan as
 /// [`rescan`], but the icons stay, as the apps did not change.
 pub fn reread(cx: &mut App) -> Vec<DetectedApp> {
-    if !cx.has_global::<ScanGlobal>() {
-        return scan(&environment());
-    }
-    cx.update_global(|global: &mut ScanGlobal, _| {
-        let apps = scan(&global.env);
-        global.apps = Some(apps.clone());
-        apps
-    })
+    start(cx, true);
+    cx.try_global::<ScanGlobal>()
+        .and_then(|scan| scan.apps.clone())
+        .unwrap_or_default()
 }
 
 /// What a scan found, for the diagnostic log: each app's name and how
@@ -234,6 +353,7 @@ pub fn installed(cx: &mut App) -> Vec<Installed> {
 /// rescan or a hidden app changed.
 pub fn refresh_windows(cx: &mut App) {
     let choices = choices(cx);
+    let installed = installed(cx);
     let windows: Vec<_> = cx
         .windows()
         .into_iter()
@@ -241,8 +361,10 @@ pub fn refresh_windows(cx: &mut App) {
         .collect();
     for window in windows {
         let choices = choices.clone();
+        let installed = installed.clone();
         let _ = window.update(cx, |app, _, cx| {
             app.browsers = choices;
+            app.installed = installed;
             cx.notify();
         });
     }
@@ -255,6 +377,71 @@ mod tests {
     use pwrroute_browsers::Platform;
 
     use super::*;
+
+    #[gpui_kit::test]
+    fn scan_readers_share_work_and_rescan_publishes_only_the_latest_result(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let (_dir, env) = machine_with(&[]);
+        let started = Arc::new(AtomicUsize::new(0));
+        let (release, wait) = async_channel::bounded(2);
+        let calls = started.clone();
+        let completed = Rc::new(std::cell::Cell::new(0));
+        let observed = completed.clone();
+        cx.update(|cx| {
+            install(env, cx);
+            set_test_producer(
+                cx,
+                Arc::new(move || {
+                    let index = calls.fetch_add(1, Ordering::SeqCst);
+                    let wait = wait.clone();
+                    Box::pin(async move {
+                        wait.recv().await.unwrap();
+                        Ok(vec![DetectedApp {
+                            name: format!("Browser {index}"),
+                            bundle_id: None,
+                            location: "/fixture/browser".into(),
+                            profiles: vec![],
+                            directories: vec![],
+                            profiles_blocked: false,
+                        }])
+                    })
+                }),
+            );
+            on_complete(cx, Rc::new(move |_| observed.set(observed.get() + 1)));
+            assert!(apps(cx).is_empty());
+            assert!(choices(cx).is_empty());
+            assert!(installed(cx).is_empty());
+            assert!(is_loading(cx));
+            assert!(!has_run(cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(started.load(Ordering::SeqCst), 1);
+        cx.update(|cx| {
+            rescan(cx);
+            rescan(cx);
+        });
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            started.load(Ordering::SeqCst),
+            2,
+            "rescan requests coalesce"
+        );
+        assert_eq!(completed.get(), 0, "superseded scan is not published");
+        release.try_send(()).unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert_eq!(apps(cx)[0].name, "Browser 1");
+            assert!(has_run(cx));
+            assert!(!is_loading(cx));
+            assert_eq!(completed.get(), 1);
+        });
+    }
 
     /// A fixture machine with one `.app` of `bundle_id` under
     /// `/Applications`. Safari is in the catalog, so a bundle id is all the
@@ -283,6 +470,66 @@ mod tests {
         }
         let env = Env::fixture(Platform::MacOs, dir.path());
         (dir, env)
+    }
+
+    #[gpui_kit::test]
+    fn a_failed_rescan_notifies_consumers_keeps_cached_apps_and_can_retry(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let completed = Rc::new(std::cell::Cell::new(0));
+        let observed = completed.clone();
+        let (release, wait) = async_channel::bounded(2);
+        cx.update(|cx| {
+            install_fixture(
+                vec![DetectedApp {
+                    name: "Cached browser".into(),
+                    bundle_id: None,
+                    location: "/fixture/browser".into(),
+                    profiles: vec![],
+                    directories: vec![],
+                    profiles_blocked: false,
+                }],
+                cx,
+            );
+            set_test_producer(
+                cx,
+                std::sync::Arc::new(move || {
+                    let wait = wait.clone();
+                    Box::pin(async move { wait.recv().await.unwrap() })
+                }),
+            );
+            on_complete(cx, Rc::new(move |_| observed.set(observed.get() + 1)));
+            rescan(cx);
+            assert!(is_loading(cx));
+            assert_eq!(apps(cx)[0].name, "Cached browser");
+        });
+        cx.run_until_parked();
+        release
+            .try_send(Err("Fixture scan blocked".into()))
+            .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(!is_loading(cx));
+            assert_eq!(error(cx).as_deref(), Some("Fixture scan blocked"));
+            assert_eq!(apps(cx)[0].name, "Cached browser");
+        });
+        assert_eq!(
+            completed.get(),
+            1,
+            "failure is a completion consumers must observe"
+        );
+        cx.update(|cx| {
+            rescan(cx);
+        });
+        release.try_send(Ok(Vec::new())).unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(!is_loading(cx));
+            assert!(error(cx).is_none());
+            assert!(has_run(cx));
+            assert!(apps(cx).is_empty(), "a completed empty scan is a result");
+        });
+        assert_eq!(completed.get(), 2);
     }
 
     #[test]

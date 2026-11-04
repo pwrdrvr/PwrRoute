@@ -56,6 +56,12 @@ impl State {
         }
     }
 
+    pub fn refresh(&mut self, before: &str, after: &str) {
+        if self.name.text == before {
+            self.name.set(after);
+        }
+    }
+
     pub fn close(&mut self) {
         self.editing = None;
     }
@@ -103,6 +109,16 @@ pub fn pane(
                 1.5,
                 theme::danger_text(),
             )))
+        })
+        .when(sync.copy_retry, |pane| {
+            pane.child(super::request_button(
+                "sync-retry-copied-config",
+                "Retry saving source/sync settings",
+                Kind::Primary,
+                false,
+                SettingsRequest::RetryCopiedConfig,
+                cx,
+            ))
         })
         .when(sync.folders.is_empty(), |pane| {
             pane.child(what_syncs(this, cx))
@@ -788,5 +804,28 @@ fn set_row(i: usize, set: &RuleSetRow, cx: &mut Context<'_, SettingsWindow>) -> 
 impl State {
     pub(super) fn input_field(&mut self, focus: &gpui_kit::FocusHandle) -> Option<&mut TextField> {
         (self.name.focus == *focus).then_some(&mut self.name)
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[gpui_kit::test]
+    fn the_initial_name_arrives_without_overwriting_a_later_draft(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        let (view, cx) = cx.add_window_view(|_, cx| {
+            let mut model = crate::settings::fixtures::model();
+            model.sync.machine_name = "".into();
+            SettingsWindow::new(model, std::rc::Rc::new(|_, _, _| {}), cx)
+        });
+        view.update(cx, |view, _| {
+            view.sync.refresh("", "Fixture computer");
+            assert_eq!(view.sync.name.text, "Fixture computer");
+            view.sync.name.set("A draft");
+            view.sync.refresh("Fixture computer", "Another computer");
+            assert_eq!(view.sync.name.text, "A draft");
+        });
     }
 }

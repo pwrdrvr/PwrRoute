@@ -34,17 +34,18 @@ mod tests;
 mod updates;
 pub mod updates_host;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::theme::px;
 use gpui_kit::base::{Button, TestSupportExt as _};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
-    AnyElement, App, AppContext as _, Bounds, ClipboardItem, Context, Div, ElementId, Entity,
-    FocusHandle, Global, InteractiveElement as _, IntoElement, KeyBinding, ParentElement as _,
-    Render, ScrollAnchor, ScrollHandle, SharedString, StatefulInteractiveElement as _, Styled as _,
-    TitlebarOptions, Window, WindowBounds, WindowHandle, WindowOptions, div, point,
+    AnyElement, App, AppContext as _, BorrowAppContext as _, Bounds, ClipboardItem, Context, Div,
+    ElementId, Entity, FocusHandle, Global, InteractiveElement as _, IntoElement, KeyBinding,
+    ParentElement as _, Render, ScrollAnchor, ScrollHandle, SharedString,
+    StatefulInteractiveElement as _, Styled as _, TitlebarOptions, Window, WindowBounds,
+    WindowHandle, WindowOptions, div, point,
 };
 
 use self::controls::{Heading, Kind, button, card, separated};
@@ -336,12 +337,219 @@ pub fn update_if(cx: &mut App, edit: impl FnOnce(&mut SettingsModel) -> Option<(
     }
 }
 
+/// Invalidates only a pane that has been requested in this window. Unvisited
+/// panes stay lazy. A running producer is allowed to finish, then reruns once.
+pub fn reload(cx: &mut App, pane: Pane) {
+    cx.defer(move |cx| reload_now(cx, pane));
+}
+
+fn reload_now(cx: &mut App, pane: Pane) {
+    let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
+    if let Some(handle) = open {
+        let _ = handle.update(cx, |view, _, cx| {
+            if let Some(load) = view.loads.get_mut(&pane) {
+                load.invalidate();
+                if view.model.problems.remove(&pane).is_some() {
+                    view.model.pending.insert(pane);
+                    cx.notify();
+                }
+            } else if view.requested.remove(&pane) || view.pane == pane {
+                view.model.pending.insert(pane);
+                view.model.problems.remove(&pane);
+                cx.notify();
+            }
+        });
+    }
+}
+
+pub fn problem(cx: &mut App, pane: Pane, problem: String) {
+    cx.defer(move |cx| {
+        let open = cx.try_global::<OpenWindow>().and_then(|open| open.0);
+        if let Some(handle) = open {
+            let _ = handle.update(cx, |view, _, cx| {
+                if let Some(load) = view.loads.get_mut(&pane) {
+                    load.invalidate();
+                }
+                view.model.pending.remove(&pane);
+                view.model.problems.insert(pane, problem.into());
+                cx.notify();
+            });
+        }
+    });
+}
+
+/// Runs a pure producer offthread, tied to this exact window. Refreshes while
+/// it runs coalesce into one replacement; its stale result is never installed.
+pub fn load<T: Send + 'static>(
+    cx: &mut App,
+    pane: Pane,
+    produce: impl FnOnce() -> T + Send + 'static,
+    apply: impl FnOnce(&mut SettingsModel, T) + 'static,
+) {
+    load_with(cx, pane, produce, move |model, value, _| {
+        apply(model, value)
+    });
+}
+
+pub fn load_with<T: Send + 'static>(
+    cx: &mut App,
+    pane: Pane,
+    produce: impl FnOnce() -> T + Send + 'static,
+    apply: impl FnOnce(&mut SettingsModel, T, &mut App) + 'static,
+) {
+    load_future(
+        cx,
+        pane,
+        async move {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
+                .map_err(|_| "Could not load this pane. Try again.".to_owned())
+        },
+        apply,
+    );
+}
+
+#[cfg(test)]
+fn load_async<T: Send + 'static>(
+    cx: &mut App,
+    pane: Pane,
+    produce: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+    apply: impl FnOnce(&mut SettingsModel, T) + 'static,
+) {
+    load_future(cx, pane, produce, move |model, value, _| {
+        apply(model, value)
+    });
+}
+
+type QueuedLoad = Box<dyn FnOnce(&mut App)>;
+
+enum PaneLoad {
+    Running(bool),
+    Queued(bool),
+}
+
+impl PaneLoad {
+    fn invalidate(&mut self) {
+        match self {
+            Self::Running(dirty) | Self::Queued(dirty) => *dirty = true,
+        }
+    }
+}
+
+#[derive(Default)]
+struct LoadJobs(HashMap<Pane, Option<QueuedLoad>>);
+impl Global for LoadJobs {}
+
+fn load_future<T: Send + 'static>(
+    cx: &mut App,
+    pane: Pane,
+    produce: impl std::future::Future<Output = Result<T, String>> + Send + 'static,
+    apply: impl FnOnce(&mut SettingsModel, T, &mut App) + 'static,
+) {
+    let Some(handle) = cx.try_global::<OpenWindow>().and_then(|open| open.0) else {
+        return;
+    };
+    let Ok(start) = handle.update(cx, |view, _, _| match view.loads.get_mut(&pane) {
+        Some(PaneLoad::Running(dirty)) => {
+            *dirty = true;
+            false
+        }
+        Some(PaneLoad::Queued(dirty)) => {
+            *dirty = false;
+            true
+        }
+        None => {
+            view.loads.insert(pane, PaneLoad::Running(false));
+            true
+        }
+    }) else {
+        return;
+    };
+    if !start {
+        return;
+    }
+    if !cx.has_global::<LoadJobs>() {
+        cx.set_global(LoadJobs::default());
+    }
+    if cx.global::<LoadJobs>().0.contains_key(&pane) {
+        let _ = handle.update(cx, |view, _, _| {
+            view.loads.insert(pane, PaneLoad::Queued(false));
+        });
+        cx.update_global(|jobs: &mut LoadJobs, _| {
+            jobs.0.insert(
+                pane,
+                Some(Box::new(move |cx| {
+                    if cx.try_global::<OpenWindow>().and_then(|open| open.0) == Some(handle) {
+                        let ready = handle
+                            .update(cx, |view, _, cx| {
+                                if matches!(view.loads.remove(&pane), Some(PaneLoad::Queued(false)))
+                                {
+                                    true
+                                } else {
+                                    view.requested.remove(&pane);
+                                    if !view.model.problems.contains_key(&pane) {
+                                        view.model.pending.insert(pane);
+                                    }
+                                    cx.notify();
+                                    false
+                                }
+                            })
+                            .unwrap_or(false);
+                        if ready {
+                            load_future(cx, pane, produce, apply);
+                        }
+                    }
+                })),
+            );
+        });
+        return;
+    }
+    cx.update_global(|jobs: &mut LoadJobs, _| {
+        jobs.0.insert(pane, None);
+    });
+    let work = cx.background_executor().spawn(produce);
+    cx.spawn(async move |cx| {
+        let result = work.await;
+        let _ = handle.update(cx, |view, _, cx| {
+            let dirty = !matches!(view.loads.remove(&pane), Some(PaneLoad::Running(false)));
+            if dirty {
+                view.requested.remove(&pane);
+            } else {
+                view.model.pending.remove(&pane);
+                view.model.problems.remove(&pane);
+                match result {
+                    Ok(value) => {
+                        let before_privacy = view.model.privacy.clone();
+                        let before_name = view.model.sync.machine_name.clone();
+                        apply(&mut view.model, value, cx);
+                        view.privacy.refresh(&before_privacy, &view.model.privacy);
+                        view.sync
+                            .refresh(&before_name, &view.model.sync.machine_name);
+                    }
+                    Err(error) => {
+                        view.model.problems.insert(pane, error.into());
+                    }
+                }
+            }
+            cx.notify();
+        });
+        cx.update(|cx| {
+            let queued = cx.update_global(|jobs: &mut LoadJobs, _| jobs.0.remove(&pane).flatten());
+            if let Some(queued) = queued {
+                queued(cx);
+            }
+        });
+    })
+    .detach();
+}
+
 /// The Settings window's view.
 pub struct SettingsWindow {
     pub focus: FocusHandle,
     menu_bar: Entity<MenuBar>,
     pub pane: Pane,
     pub model: SettingsModel,
+    requested: HashSet<Pane>,
+    loads: HashMap<Pane, PaneLoad>,
     /// Cards folded shut, by id. A reading position, not a preference, so
     /// it lives as long as the window.
     collapsed: HashSet<&'static str>,
@@ -381,6 +589,8 @@ impl SettingsWindow {
             // Browsers, not About: it is the pane people open Settings for.
             pane: Pane::Browsers,
             model,
+            requested: HashSet::new(),
+            loads: HashMap::new(),
             collapsed: HashSet::new(),
             copied: None,
             agents,
@@ -512,6 +722,31 @@ impl SettingsWindow {
     }
 
     fn pane_body(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> Div {
+        let pane = self.pane;
+        if self.model.pending.contains(&pane) || self.model.problems.contains_key(&pane) {
+            if self.model.pending.contains(&pane) && self.requested.insert(pane) {
+                self.request(SettingsRequest::LoadPane(pane), window, cx);
+            }
+            let problem = self.model.problems.get(&pane);
+            return div()
+                .child(text(self.pane.label(), 22.0, 600.0, theme::text_primary()))
+                .child(text(
+                    problem.cloned().unwrap_or_else(|| "Loading…".into()),
+                    13.0,
+                    400.0,
+                    theme::text_secondary(),
+                ))
+                .when(problem.is_some(), |body| {
+                    body.child(request_button(
+                        "settings-retry",
+                        "Try again",
+                        Kind::Default,
+                        false,
+                        SettingsRequest::RetryPane(pane),
+                        cx,
+                    ))
+                });
+        }
         match self.pane {
             Pane::General => general::pane(self, cx),
             Pane::Browsers => browsers::pane(self, cx),

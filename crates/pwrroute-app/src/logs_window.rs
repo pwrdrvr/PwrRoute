@@ -151,6 +151,7 @@ pub struct LogsWindow {
     /// stays put.
     follows_tail: bool,
     pub include_diagnostics: bool,
+    copy_generation: u64,
     /// Long lines wrap; off, they scroll sideways.
     pub wrap: bool,
     /// With Wrap off: how far the text is scrolled left, and how far it can
@@ -201,6 +202,7 @@ impl LogsWindow {
             selection: None,
             follows_tail: false,
             include_diagnostics: prefs.include_diagnostics,
+            copy_generation: 0,
             wrap: prefs.wrap,
             h_offset: 0.0,
             h_max: 0.0,
@@ -630,9 +632,10 @@ impl LogsWindow {
         if indexes.is_empty() {
             return;
         }
+        self.copy_generation += 1;
+        let generation = self.copy_generation;
         let mut out = String::new();
         if self.include_diagnostics {
-            out.push_str(&crate::help::diagnostics_report(cx));
             out.push_str(&self.copy_header(&indexes));
             out.push('\n');
         }
@@ -640,15 +643,48 @@ impl LogsWindow {
             out.push_str(self.view.lines[index].raw());
             out.push('\n');
         }
-        cx.write_to_clipboard(ClipboardItem::new_string(out));
         let count = indexes.len();
         let lines = if count == 1 { "line" } else { "lines" };
-        let with = if self.include_diagnostics {
-            " with diagnostics"
+        if self.include_diagnostics {
+            let diagnostics = crate::help::diagnostics_report(cx);
+            self.set_note("Preparing diagnostics…", cx);
+            self.copy_with_diagnostics(
+                diagnostics,
+                generation,
+                out,
+                format!("Copied {count} {lines} with diagnostics"),
+                cx,
+            );
         } else {
-            ""
-        };
-        self.set_note(format!("Copied {count} {lines}{with}"), cx);
+            cx.write_to_clipboard(ClipboardItem::new_string(out));
+            self.set_note(format!("Copied {count} {lines}"), cx);
+        }
+    }
+
+    fn copy_with_diagnostics(
+        &self,
+        diagnostics: impl std::future::Future<Output = Result<String, String>> + 'static,
+        generation: u64,
+        out: String,
+        note: String,
+        cx: &mut Context<'_, Self>,
+    ) {
+        cx.spawn(async move |view, cx| {
+            let report = diagnostics.await;
+            let _ = view.update(cx, |view, cx| {
+                if view.copy_generation != generation {
+                    return;
+                }
+                match report {
+                    Ok(report) => {
+                        cx.write_to_clipboard(ClipboardItem::new_string(format!("{report}{out}")));
+                        view.set_note(note, cx);
+                    }
+                    Err(error) => view.set_note(format!("Not copied: {error}"), cx),
+                }
+            });
+        })
+        .detach();
     }
 
     /// "Log lines: 215–219 (5 of 1,204; levels: Error, Warning, Info)",
@@ -684,6 +720,7 @@ impl LogsWindow {
     }
 
     fn copy_path(&mut self, cx: &mut Context<'_, Self>) {
+        self.copy_generation += 1;
         if let Some(tail) = &self.tail {
             cx.write_to_clipboard(ClipboardItem::new_string(
                 tail.path.to_string_lossy().into_owned(),
@@ -1915,6 +1952,39 @@ mod tests {
         });
         let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()));
         assert_eq!(copied.as_deref(), Some(format!("{LINE}\n").as_str()));
+    }
+
+    #[gpui_kit::test]
+    fn delayed_diagnostics_copy_waits_and_cannot_replace_a_newer_copy(cx: &mut TestAppContext) {
+        let (_dir, _path, view, cx) = open(cx, &format!("{LINE}\n"));
+        let (release, wait) = async_channel::bounded(1);
+        view.update(cx, |logs, cx| {
+            cx.write_to_clipboard(ClipboardItem::new_string("earlier".into()));
+            logs.copy_with_diagnostics(
+                async move { wait.recv().await.unwrap() },
+                logs.copy_generation,
+                "selected\n".into(),
+                "Copied".into(),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some("earlier")
+        );
+        view.update(cx, |logs, cx| {
+            logs.copy_generation += 1;
+            cx.write_to_clipboard(ClipboardItem::new_string("newer".into()));
+        });
+        release.try_send(Ok("diagnostics\n".into())).unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            cx.update(|_, cx| cx.read_from_clipboard().and_then(|item| item.text()))
+                .as_deref(),
+            Some("newer")
+        );
     }
 
     /// The search field has focus when the window opens; a click in the

@@ -738,7 +738,7 @@ struct SourceRevision(u64);
 
 impl Global for SourceRevision {}
 
-fn source_revision(cx: &App) -> u64 {
+pub(crate) fn source_revision(cx: &App) -> u64 {
     cx.try_global::<SourceRevision>()
         .map_or(0, |revision| revision.0)
 }
@@ -809,6 +809,29 @@ fn persist_source(source: SourceSettings, cx: &mut App) -> Result<(), String> {
         }),
     }
     saved
+}
+
+/// Retry an already-applied choice without another routing transition.
+/// A pending import notice owns its rules/Undo checks and must be retained.
+pub(crate) fn retry_source_save(
+    expected_source: &SourceSettings,
+    expected_revision: u64,
+    cx: &mut App,
+) -> Result<(), String> {
+    let changed = "The source choice changed. Review it again before saving.";
+    if source_revision(cx) != expected_revision
+        || settings_store::store(cx)
+            .is_none_or(|store| store.read(cx).settings().source != *expected_source)
+    {
+        return Err(changed.to_owned());
+    }
+    if let Some(notice) = cx.try_global::<SourceNotice>().cloned() {
+        if notice.source_revision != expected_revision || notice.source != *expected_source {
+            return Err(changed.to_owned());
+        }
+        return notice.retry(cx);
+    }
+    persist_source(expected_source.clone(), cx)
 }
 
 /// The source applied to this session, together with its persistence result.

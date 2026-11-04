@@ -742,6 +742,58 @@ struct Open {
     _answers: Subscription,
 }
 
+/// Follow only completed snapshots; completion must never start a reread.
+pub fn install(cx: &mut App) {
+    crate::browser_scan::on_complete(cx, Rc::new(refresh_browsers));
+}
+
+fn refresh_browser_model(
+    model: &mut FirstRunModel,
+    browsers: Vec<BrowserChoice>,
+    access_pane: bool,
+) {
+    let before = model.still_blocked().len();
+    model.browsers = browsers;
+    let blocked: Vec<_> = model
+        .browsers
+        .iter()
+        .filter(|browser| browser.profiles_blocked)
+        .map(|browser| browser.label.clone())
+        .collect();
+    if model.access.is_none() && access_pane && !blocked.is_empty() {
+        model.access = Some(ProfileAccess {
+            browsers: blocked,
+            ..Default::default()
+        });
+    } else if let Some(access) = model.access.as_mut() {
+        for label in blocked {
+            if !access.browsers.iter().any(|known| known.name == label.name) {
+                access.browsers.push(label);
+            }
+        }
+        if before > model.still_blocked().len() {
+            model.access.as_mut().unwrap().still_blocked = false;
+        }
+    }
+}
+
+/// Refresh only discovered browsers; retain the person's setup choices.
+pub fn refresh_browsers(cx: &mut App) {
+    if crate::browser_scan::is_loading(cx) || crate::browser_scan::error(cx).is_some() {
+        return;
+    }
+    let browsers = choices(crate::browser_scan::apps(cx), &hidden(cx));
+    for window in cx.windows() {
+        if let Some(window) = window.downcast::<FirstRun>() {
+            let _ = window.update(cx, |view, _, cx| {
+                refresh_browser_model(&mut view.model, browsers.clone(), cfg!(target_os = "macos"));
+                view.preselect(cx);
+                cx.notify();
+            });
+        }
+    }
+}
+
 impl gpui_kit::Global for Open {}
 
 /// Opens first run over the machine's facts, with the Everything else
@@ -829,6 +881,129 @@ mod tests {
 
     use super::*;
     use crate::first_run::{Picked, Step, StepState};
+
+    #[gpui_kit::test]
+    fn review_completed_scans_refresh_first_run_without_restarting_or_losing_choices(
+        cx: &mut TestAppContext,
+    ) {
+        let (release, wait) = async_channel::bounded(3);
+        let scans = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = scans.clone();
+        let writes = Rc::new(std::cell::Cell::new(0));
+        let written = writes.clone();
+        let window = cx.update(|cx| {
+            crate::assets::load_fonts(cx);
+            crate::browser_scan::install(
+                pwrroute_browsers::Env::fixture(
+                    pwrroute_browsers::Platform::current(),
+                    std::env::temp_dir(),
+                ),
+                cx,
+            );
+            crate::browser_scan::set_test_producer(
+                cx,
+                std::sync::Arc::new(move || {
+                    observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let wait = wait.clone();
+                    Box::pin(async move { wait.recv().await.unwrap() })
+                }),
+            );
+            install(cx);
+            assert!(crate::browser_scan::apps(cx).is_empty());
+            let mut hooks =
+                hooks_with(None, None, None, Rc::new(|_, _| Ok(())), Rc::new(|_, _| {}));
+            hooks.on_fallback = Rc::new(move |_, _| {
+                written.set(written.get() + 1);
+                Ok(())
+            });
+            hooks.on_reread =
+                Rc::new(|_| panic!("completion must consume the snapshot, never rescan"));
+            first_run::open(FirstRunModel::default(), hooks, cx).unwrap()
+        });
+        let detected = |blocked| crate::browser_scan::DetectedApp {
+            name: "Fixture Browser".into(),
+            bundle_id: None,
+            location: "/fixture/browser".into(),
+            profiles: vec!["Work".into()],
+            directories: vec!["Profile 1".into()],
+            profiles_blocked: blocked,
+        };
+        cx.run_until_parked();
+        release.try_send(Ok(vec![detected(true)])).unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert_eq!(view.model.browsers.len(), 1);
+                assert!(view.model.browsers[0].profiles_blocked);
+                assert_eq!(
+                    view.model.fallback.as_ref().unwrap().name,
+                    "Fixture Browser"
+                );
+                view.model.fallback.as_mut().unwrap().profile = Some("Work".into());
+                view.model.import = Some(ImportChoice::DontUse);
+            })
+            .unwrap();
+        assert_eq!(writes.get(), 1);
+        cx.update(|cx| {
+            crate::browser_scan::reread(cx);
+        });
+        cx.run_until_parked();
+        release.try_send(Ok(vec![detected(false)])).unwrap();
+        cx.run_until_parked();
+        window
+            .update(cx, |view, _, _| {
+                assert!(!view.model.browsers[0].profiles_blocked);
+                assert_eq!(
+                    view.model.fallback.as_ref().unwrap().profile.as_deref(),
+                    Some("Work")
+                );
+                assert_eq!(view.model.import, Some(ImportChoice::DontUse));
+            })
+            .unwrap();
+        assert_eq!(writes.get(), 1, "refresh must retain the chosen fallback");
+        cx.update(|cx| {
+            crate::browser_scan::reread(cx);
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+        release
+            .try_send(Err("fixture scan failure".into()))
+            .unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(
+                cx.windows()
+                    .into_iter()
+                    .all(|window| window.downcast::<FirstRun>().is_none())
+            )
+        });
+        assert_eq!(
+            scans.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "completion must not loop scans"
+        );
+    }
+
+    #[test]
+    fn review_late_profile_access_facts_preserve_setup_and_skip_choices() {
+        let mut model = FirstRunModel::fixture();
+        let fallback = model.fallback.clone();
+        let mut browser = chrome();
+        browser.profiles_blocked = true;
+        refresh_browser_model(&mut model, vec![browser.clone()], true);
+        assert_eq!(model.access.as_ref().unwrap().browsers.len(), 1);
+        assert_eq!(model.still_blocked().len(), 1);
+        model.access.as_mut().unwrap().skipped = true;
+        model.access.as_mut().unwrap().still_blocked = true;
+        browser.profiles_blocked = false;
+        refresh_browser_model(&mut model, vec![browser], true);
+        assert!(model.access.as_ref().unwrap().skipped);
+        assert!(!model.access.as_ref().unwrap().still_blocked);
+        assert!(model.still_blocked().is_empty());
+        assert_eq!(model.fallback, fallback);
+    }
 
     fn chrome() -> BrowserChoice {
         BrowserChoice {

@@ -95,16 +95,27 @@ pub fn open_link(url: &str, cx: &mut App) {
 
 /// Settings › Diagnostics' lines: version, OS, folders, the router and
 /// the log. Paths and states only, never a link.
-pub fn diagnostics_report(cx: &mut App) -> String {
+pub fn diagnostics_report(cx: &mut App) -> gpui_kit::Task<Result<String, String>> {
     let agents = mcp::local_agents(cx);
-    settings::system_host::diagnostics(cx, &agents).report()
+    let diagnostics = settings::system_host::diagnostics(cx, &agents);
+    cx.background_executor()
+        .spawn(async move { diagnostics.await.map(|diagnostics| diagnostics.report()) })
 }
 
 /// [`diagnostics_report`] on the clipboard, as Diagnostics' Copy does.
 pub fn copy_diagnostics(cx: &mut App) {
     let report = diagnostics_report(cx);
-    cx.write_to_clipboard(ClipboardItem::new_string(report));
-    log::info!(target: "pwrroute", "help: copied diagnostics info");
+    cx.spawn(async move |cx| {
+        let report = report.await;
+        cx.update(|cx| match report {
+            Ok(report) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(report));
+                log::info!(target: "pwrroute", "help: copied diagnostics info");
+            }
+            Err(error) => log::warn!("could not copy diagnostics: {error}"),
+        });
+    })
+    .detach();
 }
 
 #[cfg(test)]

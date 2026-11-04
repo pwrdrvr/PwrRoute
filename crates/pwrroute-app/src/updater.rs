@@ -554,8 +554,7 @@ pub fn install(cx: &mut App) {
             }
             cx.update(|cx| {
                 if settings {
-                    let updates = crate::settings::updates_host::model();
-                    crate::settings::update(cx, move |model| model.updates = updates);
+                    crate::settings::reload(cx, crate::settings::Pane::Updates);
                 }
                 let listeners = LISTENERS
                     .lock()

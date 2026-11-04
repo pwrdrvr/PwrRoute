@@ -45,10 +45,59 @@ pub struct Facts {
 
 /// The Diagnostics pane as things stand. `agents` is the Local agents
 /// model built for the same window.
-pub fn diagnostics(cx: &App, agents: &LocalAgents) -> Diagnostics {
-    let mut facts = facts(cx);
-    facts.agents = Some((agents.listener.clone(), agents.endpoint.clone()));
-    build_diagnostics(&facts)
+pub fn load(cx: &mut App) {
+    let mut agents = None;
+    settings::update(cx, |model| agents = Some(model.local_agents.clone()));
+    let produce = snapshot(cx, agents.as_ref());
+    settings::load(
+        cx,
+        super::Pane::Diagnostics,
+        produce,
+        |model, diagnostics| model.diagnostics = diagnostics,
+    );
+}
+
+/// Capture GPUI-owned values now; all OS/file/router reads happen when run.
+fn snapshot(
+    cx: &App,
+    agents: Option<&LocalAgents>,
+) -> impl FnOnce() -> Diagnostics + Send + 'static {
+    let router = settings_store::router(cx);
+    let experimental = experimental(cx);
+    let agents = agents.map(|agents| (agents.listener.clone(), agents.endpoint.clone()));
+    move || {
+        let mut facts = facts(router);
+        facts.agents = agents;
+        facts.yield_browser_focus = experimental.yield_browser_focus;
+        build_diagnostics(&facts)
+    }
+}
+
+/// Help and Logs copy a complete report after the same background producer.
+pub fn diagnostics(cx: &App, agents: &LocalAgents) -> gpui_kit::Task<Result<Diagnostics, String>> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static PREPARING: AtomicBool = AtomicBool::new(false);
+    if PREPARING.swap(true, Ordering::AcqRel) {
+        return cx.background_executor().spawn(async {
+            Err("A diagnostics report is already being prepared. Try again.".into())
+        });
+    }
+    let produce = snapshot(cx, Some(agents));
+    let (sender, receiver) = async_channel::bounded(1);
+    cx.background_executor()
+        .spawn(async move {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(produce))
+                .map_err(|_| "Could not prepare diagnostics.".to_owned());
+            PREPARING.store(false, Ordering::Release);
+            let _ = sender.send(result).await;
+        })
+        .detach();
+    cx.background_executor().spawn(async move {
+        receiver
+            .recv()
+            .await
+            .unwrap_or_else(|_| Err("Could not prepare diagnostics.".into()))
+    })
 }
 
 pub fn experimental(cx: &App) -> Experimental {
@@ -61,8 +110,8 @@ pub fn experimental(cx: &App) -> Experimental {
 }
 
 /// Everything but the MCP door, read from this process and the OS.
-fn facts(cx: &App) -> Facts {
-    let dry_run = settings_store::router(cx)
+fn facts(router: Option<pwrroute_router::RouterHandle>) -> Facts {
+    let dry_run = router
         .and_then(|router| router.status().ok())
         .is_some_and(|status| status.dry_run);
     Facts {
@@ -77,7 +126,7 @@ fn facts(cx: &App) -> Facts {
         agents: None,
         log: crate::diag_log::path().map(Path::to_path_buf),
         build: BuildInfo::current(),
-        yield_browser_focus: experimental(cx).yield_browser_focus,
+        yield_browser_focus: None,
     }
 }
 
@@ -274,13 +323,7 @@ pub fn refresh_diagnostics(cx: &mut App) {
     if !settings::is_open(cx) {
         return;
     }
-    let mut facts = facts(cx);
-    settings::update(cx, move |model| {
-        let agents = &model.local_agents;
-        facts.agents = Some((agents.listener.clone(), agents.endpoint.clone()));
-        model.experimental.yield_browser_focus = facts.yield_browser_focus;
-        model.diagnostics = build_diagnostics(&facts);
-    });
+    settings::reload(cx, super::Pane::Diagnostics);
 }
 
 #[cfg(test)]
