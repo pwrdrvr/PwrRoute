@@ -1706,3 +1706,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "property_tests/launch.rs"]
+pub(crate) mod properties;

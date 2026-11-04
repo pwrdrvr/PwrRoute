@@ -231,7 +231,7 @@ mod tests {
         trace::{Outcome, Privacy, Timings},
     };
 
-    fn record(id: u64, received_at: SystemTime) -> DispatchRecord {
+    pub(super) fn record(id: u64, received_at: SystemTime) -> DispatchRecord {
         DispatchRecord {
             id: DispatchId(id),
             received_at,
@@ -366,3 +366,7 @@ mod tests {
         assert_eq!(recent.capacity(), 2);
     }
 }
+
+#[cfg(test)]
+#[path = "property_tests/recent.rs"]
+mod properties;

@@ -484,3 +484,7 @@ mod tests {
         assert_eq!(tags(&releases), [None, None, None, some("v0.0.1-alpha.3")]);
     }
 }
+
+#[cfg(test)]
+#[path = "property_tests/update_channel.rs"]
+mod properties;

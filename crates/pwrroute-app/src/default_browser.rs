@@ -1223,3 +1223,7 @@ mod tests {
         assert_eq!(reads.get(), before + 1);
     }
 }
+
+#[cfg(test)]
+#[path = "property_tests/default_browser.rs"]
+mod properties;

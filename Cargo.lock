@@ -6023,6 +6023,7 @@ dependencies = [
 name = "pwrroute-browsers"
 version = "0.17.0"
 dependencies = [
+ "proptest",
  "pwrroute-engine",
  "roxmltree 0.21.2",
  "rustix",
@@ -6071,6 +6072,7 @@ version = "0.17.0"
 dependencies = [
  "anyhow",
  "log",
+ "proptest",
  "pwrroute-browsers",
  "pwrroute-engine",
  "pwrroute-os",
@@ -6114,6 +6116,7 @@ dependencies = [
  "interprocess",
  "libc",
  "log",
+ "proptest",
  "pwrroute-engine",
  "serde",
  "serde_json",

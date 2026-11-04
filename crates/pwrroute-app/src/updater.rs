@@ -66,6 +66,14 @@ pub const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// In-flight blocking I/O finishes under its timeout; this is cooperative.
 static STOPPING: AtomicBool = AtomicBool::new(false);
 
+fn stopping() -> &'static AtomicBool {
+    #[cfg(test)]
+    if let Some(environment) = properties::environment() {
+        return &environment.stopping;
+    }
+    &STOPPING
+}
+
 /// What [`run_startup_hooks`] tells Velopack, apart from the hooks. Kept
 /// as data so a test can hold the policy without a Velopack install.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,7 +136,7 @@ pub enum QuitApply {
 /// quit goes on; PwrRoute is not started again, and the next link opens
 /// the new version.
 pub fn apply_pending_on_quit() {
-    STOPPING.store(true, Ordering::Release);
+    stopping().store(true, Ordering::Release);
     match apply_pending() {
         QuitApply::Nothing => {}
         QuitApply::Applying(version) => {
@@ -403,6 +411,10 @@ impl Coordinator {
 static UPDATER: OnceLock<Mutex<Coordinator>> = OnceLock::new();
 
 fn coordinator() -> &'static Mutex<Coordinator> {
+    #[cfg(test)]
+    if let Some(environment) = properties::environment() {
+        return &environment.coordinator;
+    }
     UPDATER.get_or_init(|| Mutex::new(Coordinator::default()))
 }
 
@@ -534,7 +546,7 @@ pub fn install(cx: &mut App) {
         return;
     }
     cx.on_app_quit(|_| {
-        STOPPING.store(true, Ordering::Release);
+        stopping().store(true, Ordering::Release);
         async {}
     })
     .detach();
@@ -612,7 +624,7 @@ pub fn installation() -> Installation {
 /// Check for an update, and download it, on a thread of its own: Velopack's
 /// client blocks, and a download can take a while.
 pub fn check_in_background(trigger: Trigger) {
-    if STOPPING.load(Ordering::Acquire) {
+    if stopping().load(Ordering::Acquire) {
         return;
     }
     let installed = installed_version();
@@ -628,14 +640,25 @@ fn finish_check(check: Check, outcome: Outcome) -> Option<Check> {
 }
 
 fn spawn_check(mut check: Check) {
+    #[cfg(test)]
+    let environment = properties::environment();
     loop {
         let spawned = thread::Builder::new()
             .name("pwrroute-updater".to_owned())
             .spawn(move || {
+                #[cfg(test)]
+                properties::install_environment(environment);
                 let mut check = check;
                 loop {
+                    #[cfg(test)]
+                    let outcome =
+                        properties::fetch(check).unwrap_or_else(|| check_and_download(check));
+                    #[cfg(not(test))]
                     let outcome = check_and_download(check);
-                    match finish_check(check, outcome) {
+                    let next = finish_check(check, outcome);
+                    #[cfg(test)]
+                    properties::finished(next);
+                    match next {
                         Some(next) => check = next,
                         None => break,
                     }
@@ -816,7 +839,7 @@ fn plan(
 }
 
 fn check_and_download(check: Check) -> Outcome {
-    if STOPPING.load(Ordering::Acquire) {
+    if stopping().load(Ordering::Acquire) {
         return Outcome::Failed("update check was cancelled during shutdown".into());
     }
     // The installed version (Velopack's sq.version), not the one compiled
@@ -827,7 +850,7 @@ fn check_and_download(check: Check) -> Outcome {
     };
     let installed = locator.get_manifest_version().to_string();
     let slot = check.slot;
-    let releases = github_releases::fetch(&locator.get_manifest_channel(), &STOPPING);
+    let releases = github_releases::fetch(&locator.get_manifest_channel(), stopping());
     update_check(check, |updater| updater.releases = Some(releases.clone()));
     let releases = match releases {
         Ok(releases) => releases,
@@ -856,12 +879,12 @@ fn check_and_download(check: Check) -> Outcome {
         Ok(manager) => manager,
         Err(error) => return Outcome::NotInstalled(error.to_string()),
     };
-    if STOPPING.load(Ordering::Acquire) {
+    if stopping().load(Ordering::Acquire) {
         return Outcome::Failed("update check was cancelled during shutdown".into());
     }
     match manager.check_for_updates() {
         Ok(UpdateCheck::UpdateAvailable(update)) => {
-            if STOPPING.load(Ordering::Acquire) {
+            if stopping().load(Ordering::Acquire) {
                 return Outcome::Failed("update check was cancelled during shutdown".into());
             }
             let target = &update.TargetFullRelease;
@@ -1554,3 +1577,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "property_tests/updater.rs"]
+mod properties;
