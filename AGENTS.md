@@ -113,6 +113,19 @@ allow-list written down.
 - Report the sandbox ID, the commit, and each check's exit status.
 - Without the Sandboxer MCP, run the checks locally as this file describes.
 
+## Testing rules
+
+1. **A bug fix states the rule it broke as a property, model or oracle
+   test, and confirms that test fails on the pre-fix code.** Do the same
+   for new rule-heavy logic (URL matching, rule suggestions, launch
+   arguments, release slots, window geometry), state machines and
+   concurrency (sync, rule drafts, the updater, default-browser requests,
+   approvals), and anything Finicky also answers. Example tests alone
+   check only what their author expected. Here they have asserted the bug
+   as correct.
+   [docs/property-model-oracle-testing.md](docs/property-model-oracle-testing.md)
+   says what each kind is and how to write one.
+
 ## Licenses
 
 `deny.toml` is the gate: its `[licenses] allow` list judges every crate that
