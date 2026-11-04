@@ -678,6 +678,14 @@ fn empty_username_with_a_password_matches() {
 }
 
 #[test]
+fn an_empty_authority_is_preserved_when_ignoring_queries() {
+    let e = engine(None, RulesFile::default());
+    for url in ["mailto:///a?q=a", "file:///a?x=1#top"] {
+        check_suggestions(&e, url).unwrap();
+    }
+}
+
+#[test]
 fn trailing_double_slash_with_a_password_or_literal_star_matches() {
     let e = engine(None, RulesFile::default());
     for url in ["https://a:0@site.com//a//", "https://site.com//*//"] {

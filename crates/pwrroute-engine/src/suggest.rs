@@ -156,7 +156,7 @@ pub fn suggest_rule(url: &str) -> Suggestion {
         // of its kind.
         let page = if tail {
             Candidate::one(
-                format!("{scheme}:{}", prefix_pattern(parsed.path())),
+                prefix_pattern(&parsed[..url::Position::AfterPath]),
                 WHY_PAGE_ANY_QUERY,
             )
         } else {
