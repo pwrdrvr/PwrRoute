@@ -129,11 +129,12 @@ crate docs map the modules.
   safety comment on each block. `src/native/mod.rs` documents what each OS
   can answer.
 - **A failed load keeps what routes.** `Reloader` keeps the last engine
-  that loaded when a reload fails, except for a config no engine has held
-  yet (never loaded, or broken when it appeared): that one is left out and
-  `rules.json` alone is swapped in (`Status::config` is `None`, `error`
-  says why), so the visual rules keep routing and an edit to them applies.
-  Only when `rules.json` fails too does the empty stand-in engine stay.
+  when a source it held fails. A source no engine has held yet is left out
+  instead: a broken config leaves `rules.json` routing alone, and a broken
+  `rules.json` leaves the config routing alone. The omitted source's
+  `Status::config` or `Status::rules` is `None`, and `error` says why; edits
+  to the working source still apply. When neither loads, the empty fallback
+  engine stays.
 - **Never watch a directory.** Discovery and reload check exact paths only;
   on macOS a directory watch can open protected folders and prompt the user.
 - oxc's enum transform needs `SemanticBuilder::with_enum_eval(true)`; without

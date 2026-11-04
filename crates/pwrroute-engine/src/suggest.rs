@@ -105,13 +105,19 @@ const WHY_USER_HOST: &str =
 /// Wildcard patterns for a rule that would route `url`, and whether a rule
 /// that fits it precisely needs JS instead.
 pub fn suggest_rule(url: &str) -> Suggestion {
-    let Ok(parsed) = url::Url::parse(url.trim()) else {
+    let Ok(mut parsed) = url::Url::parse(url.trim()) else {
         return Suggestion {
             candidates: Vec::new(),
             needs_js: false,
             why: vec![WHY_NOT_A_URL],
         };
     };
+    // Finicky's bundled core-js URL parser encodes `^` in hierarchical
+    // paths; rust-url leaves it literal. Build every pattern from the href
+    // the matcher sees. Opaque paths (mailto:, data:) keep their own set.
+    if !parsed.cannot_be_a_base() && parsed.path().contains('^') {
+        parsed.set_path(&parsed.path().replace('^', "%5E"));
+    }
     let mut suggestion = Suggestion::default();
     let scheme = parsed.scheme();
     // A user name sits between `//` and the host, where the prefix a
@@ -120,9 +126,9 @@ pub fn suggest_rule(url: &str) -> Suggestion {
     // it.
     let user = parsed.username();
     let userinfo = match (user.is_empty(), parsed.password()) {
-        (true, _) => String::new(),
+        (true, None) => String::new(),
         (false, None) => format!("{}@", escape(user)),
-        (false, Some(_)) => format!("{}:*@", escape(user)),
+        (_, Some(_)) => format!("{}:*@", escape(user)),
     };
     // A pattern that starts with `host:port` reads as one with a scheme, so
     // a port needs the scheme written out too.
@@ -150,7 +156,7 @@ pub fn suggest_rule(url: &str) -> Suggestion {
         // of its kind.
         let page = if tail {
             Candidate::one(
-                format!("{scheme}:{}*", escape(parsed.path())),
+                prefix_pattern(&parsed[..url::Position::AfterPath]),
                 WHY_PAGE_ANY_QUERY,
             )
         } else {
@@ -180,14 +186,22 @@ pub fn suggest_rule(url: &str) -> Suggestion {
             .push(Candidate::one(format!("{origin}*"), why_host));
         return suggestion;
     }
-    let first = path.trim_start_matches('/').split('/').next().unwrap_or("");
+    let first = path
+        .strip_prefix('/')
+        .unwrap_or(path)
+        .split('/')
+        .next()
+        .unwrap_or("");
     if !first.is_empty() {
         let narrowest = if path.starts_with(&format!("/{first}/")) {
             Candidate::one(format!("{origin}/{}/*", escape(first)), why_section)
         } else if tail {
             // `host/first/*` needs a slash after the segment, which this
             // link does not have: the page, with any query.
-            Candidate::one(format!("{origin}{}*", escape(path)), WHY_PAGE_ANY_QUERY)
+            Candidate::one(
+                format!("{origin}{}", prefix_pattern(path)),
+                WHY_PAGE_ANY_QUERY,
+            )
         } else {
             // No slash after the segment and nothing after the path: the
             // link itself.
@@ -270,7 +284,7 @@ fn wider_domains(host: &str) -> Vec<&str> {
 /// must not be written into a rule.
 fn link_pattern(parsed: &url::Url, prefix: &str, userinfo: &str) -> String {
     if parsed.password().is_none() {
-        return escape(parsed.as_str());
+        return avoid_trailing_double_slash(escape(parsed.as_str()));
     }
     let mut rest = String::new();
     if let Some(host) = parsed.host_str() {
@@ -286,7 +300,24 @@ fn link_pattern(parsed: &url::Url, prefix: &str, userinfo: &str) -> String {
     if let Some(fragment) = parsed.fragment() {
         rest.push_str(&format!("#{}", escape(fragment)));
     }
-    format!("{prefix}{userinfo}{rest}")
+    avoid_trailing_double_slash(format!("{prefix}{userinfo}{rest}"))
+}
+
+// Finicky treats `\*` as a literal star even after another backslash.
+// Its glob language cannot express a literal trailing backslash followed by
+// a wildcard, so use the longest prefix it can express.
+fn prefix_pattern(text: &str) -> String {
+    format!("{}*", escape(text.trim_end_matches('\\')))
+}
+
+// Finicky adds `.*` to scheme patterns ending in `//`, then expands that
+// star again, accidentally requiring an extra character. An explicit glob
+// avoids that branch (including escaped literal stars and password globs).
+fn avoid_trailing_double_slash(mut pattern: String) -> String {
+    if pattern.contains('*') && pattern.ends_with("//") {
+        pattern.push('*');
+    }
+    pattern
 }
 
 /// A path segment that is an identifier rather than a section name: all

@@ -64,13 +64,12 @@ pub struct Status {
     pub config: Option<PathBuf>,
     /// The `rules.json` the active engine read, when one is configured.
     pub rules: Option<PathBuf>,
-    /// Why the last load failed. While set, the engine is the last one that
-    /// worked. A config that no engine has held yet (it never loaded, or it
-    /// appeared broken while `rules.json` was in charge) is left out instead:
-    /// the engine is `rules.json` alone, so its rules keep routing until the
-    /// config loads, and `config` is `None`. If `rules.json` does not load
-    /// either and nothing ever did, the engine is a fallback that sends
-    /// everything to [`FALLBACK_BROWSER`](crate::FALLBACK_BROWSER).
+    /// Why the last load failed. A failing source already held by the
+    /// active engine keeps that entire engine. A source no engine has held
+    /// yet is left out, so the other source keeps routing and its edits
+    /// apply: `config` or `rules` is `None` for the omitted source. If
+    /// neither loads, the engine is a fallback that sends everything to
+    /// [`FALLBACK_BROWSER`](crate::FALLBACK_BROWSER).
     pub error: Option<String>,
     /// Bumped each time a new engine is swapped in.
     pub generation: u64,
@@ -166,10 +165,9 @@ impl std::fmt::Debug for Reloader {
 }
 
 impl Reloader {
-    /// Loads the chosen config and `rules.json`. When the config fails, the
-    /// reloader still starts, with `rules.json` alone in charge (or, if that
-    /// fails too, a fallback engine) and the error in [`Status::error`], so
-    /// links keep going somewhere explicit.
+    /// Loads the chosen config and `rules.json`. A failing source is left
+    /// out at startup so the other can route alone, with the error in
+    /// [`Status::error`]. If both fail, starts with a fallback engine.
     pub fn new(
         choice: ConfigChoice,
         rules_path: Option<PathBuf>,
@@ -178,13 +176,22 @@ impl Reloader {
     ) -> Result<Self> {
         let Attempt {
             result,
-            rules_alone,
+            partial_engine,
             read,
             stale,
-        } = attempt(&choice, rules_path.as_deref(), &host, limits, None, &[]);
+            rules_used,
+        } = attempt(
+            &choice,
+            rules_path.as_deref(),
+            &host,
+            limits,
+            None,
+            false,
+            &[],
+        );
         let (loaded, result) = match result {
             Ok(engine) => (Some(engine), Ok(())),
-            Err(e) => (rules_alone, Err(e)),
+            Err(e) => (partial_engine, Err(e)),
         };
         let swapped = loaded.is_some();
         let engine = match loaded {
@@ -203,7 +210,7 @@ impl Reloader {
             seen: 0,
             pending: None,
         };
-        let _ = reloader.finish(swapped, result, read, stale);
+        let _ = reloader.finish(swapped, result, read, stale, rules_used);
         Ok(reloader)
     }
 
@@ -258,37 +265,38 @@ impl Reloader {
     }
 
     /// Builds a new engine from the files as they are now and swaps it in.
-    /// On failure the active engine stays and the error is returned and kept
-    /// in [`Status::error`], unless no config was in charge: then a config
-    /// that fails is left out and `rules.json` alone is swapped in, so an
-    /// edit to it still applies while the config is broken.
+    /// On failure the error is returned and kept in [`Status::error`]. A
+    /// failing source already in charge keeps the whole active engine;
+    /// a never-loaded source is omitted so the other source's edits apply.
     pub fn reload(&mut self) -> Result<()> {
         let Attempt {
             result,
-            rules_alone,
+            partial_engine,
             read,
             stale,
+            rules_used,
         } = attempt(
             &self.choice,
             self.rules_path.as_deref(),
             &self.host,
             self.limits,
             self.status.config.as_deref(),
+            self.status.rules.is_some(),
             &self.engine.dependencies(),
         );
         let (loaded, result) = match result {
             Ok(engine) => (Some(engine), Ok(())),
-            Err(e) => (rules_alone, Err(e)),
+            Err(e) => (partial_engine, Err(e)),
         };
         let swapped = loaded.is_some();
         if let Some(engine) = loaded {
             self.engine = engine;
         }
-        self.finish(swapped, result, read, stale)
+        self.finish(swapped, result, read, stale, rules_used)
     }
 
     /// Records a load attempt: `swapped` says a new engine is in place (the
-    /// one asked for, or `rules.json` alone when the config failed), the
+    /// one asked for, or with a never-loaded source omitted), the
     /// status follows it and `result`, and the choice's paths, what the
     /// active engine and the attempt read, and `rules.json` are watched.
     fn finish(
@@ -297,10 +305,11 @@ impl Reloader {
         result: Result<()>,
         read: Vec<PathBuf>,
         stale: bool,
+        rules_used: bool,
     ) -> Result<()> {
         if swapped {
             self.status.config = self.engine.config_path().map(Path::to_path_buf);
-            self.status.rules = self.rules_path.clone();
+            self.status.rules = self.rules_path.clone().filter(|_| rules_used);
             self.status.generation += 1;
         }
         let outcome = match result {
@@ -338,15 +347,16 @@ impl Reloader {
 /// One load attempt.
 struct Attempt {
     result: Result<Engine>,
-    /// When `result` failed on a config that no engine held (none was in
-    /// charge): an engine over `rules.json` alone, to route with until the
-    /// config loads. `None` when `rules.json` does not load either.
-    rules_alone: Option<Engine>,
+    /// A usable engine with a never-loaded, failing source omitted.
+    /// None when a previously loaded source failed, or neither can load.
+    partial_engine: Option<Engine>,
     /// The config and the files it imported, read whether or not it loaded.
     read: Vec<PathBuf>,
     /// A file the load read changed while it ran, so the engine may hold an
     /// older version than the files now on disk.
     stale: bool,
+    /// Whether the new engine includes a successfully read rules layer.
+    rules_used: bool,
 }
 
 /// Loads the files as they are now. `in_charge` is the config the active
@@ -358,6 +368,7 @@ fn attempt(
     host: &Rc<dyn Host>,
     limits: Limits,
     in_charge: Option<&Path>,
+    rules_in_charge: bool,
     previously_read: &[PathBuf],
 ) -> Attempt {
     let config = match choice {
@@ -375,9 +386,10 @@ fn attempt(
                             "{} is gone; keeping the last working config",
                             gone.display()
                         )),
-                        rules_alone: None,
+                        partial_engine: None,
                         read: Vec::new(),
                         stale: false,
+                        rules_used: false,
                     };
                 }
                 None
@@ -408,26 +420,35 @@ fn attempt(
         };
         Engine::from_sources_reading(&sources, Rc::clone(host), limits, imports)
     };
-    let (result, rules_alone) = match &rules {
-        Err(e) => (Err(anyhow!("{e:#}")), None),
+    let (result, partial_engine) = match &rules {
+        Err(e) => {
+            // Mirror the never-loaded config case: broken rules that no
+            // engine has held must not disable a working JS config. Once
+            // rules have loaded, preserve the entire last working engine.
+            let partial = (!rules_in_charge)
+                .then(|| load(config.clone(), &RulesFile::default(), &imports).ok())
+                .flatten();
+            (Err(anyhow!("{e:#}")), partial)
+        }
         Ok(rules) => {
             let result = load(config.clone(), rules, &imports);
             // A config no engine holds yet that fails is left out rather
             // than taking rules.json down with it. One that was in charge
             // is not: its last load keeps routing, rules.json with it.
-            let rules_alone = (result.is_err() && config.is_some() && in_charge.is_none())
+            let partial_engine = (result.is_err() && config.is_some() && in_charge.is_none())
                 .then(|| load(None, rules, &Rc::default()).ok())
                 .flatten();
-            (result, rules_alone)
+            (result, partial_engine)
         }
     };
     let mut read: Vec<PathBuf> = config.into_iter().collect();
     read.extend(imports.borrow().iter().cloned());
     Attempt {
         result,
-        rules_alone,
+        partial_engine,
         read,
         stale: fingerprint_of(&known) != before,
+        rules_used: rules.is_ok(),
     }
 }
 
