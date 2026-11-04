@@ -130,7 +130,7 @@ fn anchor_on(
 ) -> Option<StatusItemAnchor> {
     let primary = screens.first()?;
     let at_pointer = pointer.and_then(|pointer| pointer_anchor(screens, pointer));
-    if let Some(item) = item_anchor(screens, position, item_size) {
+    if let Some(item) = item_anchor(screens, position, item_size, at_pointer.as_ref()) {
         return Some(match at_pointer {
             Some(pointer) if !beside(&item, &pointer) => pointer,
             _ => item,
@@ -142,34 +142,51 @@ fn anchor_on(
     }))
 }
 
-/// The item from tray-icon's rect, on the display holding its center.
+/// The item from tray-icon's rect, decoded using each screen's own scale.
+/// More than one decoding can put the center inside its candidate screen.
+/// Prefer the rect that fits that screen's menu bar (including the macOS 27
+/// overhang), then the pointer's display on a tie. Taking the first center
+/// match lets a 2x primary claim a 1x external's item at half its coordinates.
 fn item_anchor(
     screens: &[ScreenRects],
     position: (f64, f64),
     item_size: (f64, f64),
+    pointer: Option<&StatusItemAnchor>,
 ) -> Option<StatusItemAnchor> {
     if item_size.0 < 1.0 || item_size.1 < 1.0 {
         return None;
     }
     let primary_height = screens.first()?.frame.size.height;
-    screens.iter().find_map(|screen| {
-        let scale = screen.scale;
-        let frame = screen.frame;
-        let left = frame.origin.x;
-        let top = primary_height - (frame.origin.y + frame.size.height);
-        let (x, y) = (position.0 / scale, position.1 / scale);
-        let (width, height) = (item_size.0 / scale, item_size.1 / scale);
-        let (center_x, center_y) = (x + width / 2.0, y + height / 2.0);
-        let inside = (left..left + frame.size.width).contains(&center_x)
-            && (top..top + frame.size.height).contains(&center_y);
-        inside.then(|| StatusItemAnchor {
-            item: Bounds {
-                origin: point(px((x - left) as f32), px((y - top) as f32)),
-                size: size(px(width as f32), px(height as f32)),
-            },
-            ..anchor_at(screen, 0.0, 0.0)
+    screens
+        .iter()
+        .filter_map(|screen| {
+            let scale = screen.scale;
+            let frame = screen.frame;
+            let left = frame.origin.x;
+            let top = primary_height - (frame.origin.y + frame.size.height);
+            let (x, y) = (position.0 / scale, position.1 / scale);
+            let (width, height) = (item_size.0 / scale, item_size.1 / scale);
+            let (center_x, center_y) = (x + width / 2.0, y + height / 2.0);
+            let inside = (left..left + frame.size.width).contains(&center_x)
+                && (top..top + frame.size.height).contains(&center_y);
+            inside.then(|| {
+                let fit = (y - top).abs() + (height - menu_bar_height(screen)).abs();
+                let at_pointer = pointer.is_some_and(|pointer| pointer.display == screen.display);
+                (
+                    fit,
+                    at_pointer,
+                    StatusItemAnchor {
+                        item: Bounds {
+                            origin: point(px((x - left) as f32), px((y - top) as f32)),
+                            size: size(px(width as f32), px(height as f32)),
+                        },
+                        ..anchor_at(screen, 0.0, 0.0)
+                    },
+                )
+            })
         })
-    })
+        .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| b.1.cmp(&a.1)))
+        .map(|(_, _, anchor)| anchor)
 }
 
 /// An empty item where the pointer is, as deep as the menu bar; `None`
@@ -568,5 +585,132 @@ mod tests {
         assert!(!in_frame(built_in, (1496.0, 500.0)));
         // The bottom edge belongs to the display below, if any.
         assert!(!in_frame(built_in, (100.0, 0.0)));
+    }
+
+    #[test]
+    fn a_one_x_item_below_a_two_x_primary_uses_its_own_display() {
+        // Shrunk seed 1: tray-icon scales this lower display's (8, 700)
+        // by 1, not the primary's 2. The old first match opened at y=366.
+        let primary = ScreenRects {
+            display: DisplayId::new(1),
+            frame: rect(0.0, 0.0, 900.0, 700.0),
+            visible: rect(0.0, 0.0, 900.0, 676.0),
+            scale: 2.0,
+        };
+        let below = ScreenRects {
+            display: DisplayId::new(2),
+            frame: rect(0.0, -700.0, 900.0, 700.0),
+            visible: rect(0.0, -700.0, 900.0, 676.0),
+            scale: 1.0,
+        };
+        for pointer in [None, Some((23.0, -12.0)), Some((450.0, 350.0))] {
+            assert_eq!(
+                origin_on(&[primary, below], ((8.0, 700.0), (30.0, 24.0)), pointer),
+                Some((DisplayId::new(2), point(px(4.0), px(28.0))))
+            );
+        }
+    }
+
+    #[test]
+    fn a_one_x_item_right_of_a_two_x_primary_is_not_halved() {
+        let external = ScreenRects {
+            display: DisplayId::new(2),
+            frame: rect(1496.0, -57.0, 1280.0, 1024.0),
+            visible: rect(1496.0, -57.0, 1280.0, 1000.0),
+            scale: 1.0,
+        };
+        for pointer in [None, Some((2611.0, 955.0)), Some((700.0, 500.0))] {
+            assert_eq!(
+                origin_on(
+                    &[built_in(), external],
+                    ((2596.0, 0.0), (30.0, 24.0)),
+                    pointer
+                ),
+                Some((DisplayId::new(2), point(px(965.0), px(28.0))))
+            );
+        }
+    }
+
+    /// Screens are placed in AppKit points; only the tray-icon boundary
+    /// converts the item's rect to physical pixels using its OWN display.
+    fn layouts() -> impl proptest::strategy::Strategy<Value = Vec<ScreenRects>> {
+        use proptest::prelude::*;
+        let screen = (
+            900u32..2600,
+            700u32..1500,
+            any::<bool>(),
+            24u32..=37,
+            any::<bool>(),
+        );
+        (prop::collection::vec(screen, 1..=3), 0usize..4).prop_map(|(specs, direction)| {
+            let mut screens = Vec::new();
+            for (i, (w, h, retina, mb, dock)) in specs.into_iter().enumerate() {
+                let (w, h, mb) = (f64::from(w), f64::from(h), f64::from(mb));
+                let (x, y) = if let Some(previous) = screens.last() {
+                    let previous: &ScreenRects = previous;
+                    let f = previous.frame;
+                    match direction {
+                        0 => (f.origin.x + f.size.width, f.origin.y + f.size.height - h),
+                        1 => (f.origin.x - w, f.origin.y + f.size.height - h),
+                        2 => (f.origin.x, f.origin.y + f.size.height),
+                        _ => (f.origin.x, f.origin.y - h),
+                    }
+                } else {
+                    (0.0, 0.0)
+                };
+                let dock = if dock { 70.0 } else { 0.0 };
+                screens.push(ScreenRects {
+                    display: DisplayId::new(i as u64 + 1),
+                    frame: rect(x, y, w, h),
+                    visible: rect(x, y + dock, w, h - mb - dock),
+                    scale: if retina { 2.0 } else { 1.0 },
+                });
+            }
+            screens
+        })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::test_runner::Config {
+            failure_persistence: None,
+            ..proptest::test_runner::Config::default()
+        })]
+        #[test]
+        fn dropdown_follows_the_pressed_display(
+            screens in layouts(), chosen in 0usize..3, fraction in 0u32..=1000,
+            shape in 0u8..3,
+        ) {
+            use proptest::prelude::*;
+            let target = &screens[chosen % screens.len()];
+            let frame = target.frame;
+            let mb = menu_bar_height(target);
+            // Keep the entire item clear of the dropdown's 4pt edge margin.
+            let x = 8.0 + f64::from(fraction) / 1000.0 * (frame.size.width - 46.0);
+            let center = x + 15.0;
+            let overhang = if shape == 1 { 1.0 } else { 0.0 };
+            let primary_height = screens[0].frame.size.height;
+            let top = primary_height - frame.origin.y - frame.size.height;
+            let (position, item_size) = if shape == 2 {
+                ((0.0, primary_height * screens[0].scale), (0.0, 0.0))
+            } else {
+                (((frame.origin.x + x) * target.scale, (top - overhang) * target.scale),
+                 (30.0 * target.scale, (mb + 2.0 * overhang) * target.scale))
+            };
+            let on_item = (frame.origin.x + center, frame.origin.y + frame.size.height - mb / 2.0);
+            let elsewhere = (screens[0].frame.size.width / 2.0, screens[0].frame.size.height / 2.0);
+            for pointer in [None, Some(on_item), Some(elsewhere)] {
+                // A 0x0 rect contains no display or x information. Without
+                // a menu-bar press the documented fallback is primary/right.
+                let (expected, expected_x) = if shape == 2 && pointer != Some(on_item) {
+                    (&screens[0], screens[0].frame.size.width - 8.0)
+                } else { (target, center) };
+                let anchor = anchor_on(&screens, position, item_size, pointer).unwrap();
+                let origin = dropdown_origin(&anchor, px(300.0));
+                prop_assert_eq!(anchor.display, expected.display, "pointer {:?}; origin {:?}", pointer, origin);
+                let menu_bar = px(menu_bar_height(expected) as f32);
+                prop_assert!(origin.y >= menu_bar && origin.y <= menu_bar + px(10.0), "origin {:?}, menu bar {:?}", origin, menu_bar);
+                prop_assert!(origin.x <= px(expected_x as f32) && px(expected_x as f32) <= origin.x + px(300.0));
+            }
+        }
     }
 }
