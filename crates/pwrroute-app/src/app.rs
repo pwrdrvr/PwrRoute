@@ -11,6 +11,7 @@ use gpui_kit::{
     Subscription, Window, div,
 };
 
+use crate::engine_worker::{EngineWorker, Lane};
 use pwrroute_engine::{Description, Engine, Limits, NativeHost, discovery};
 
 use crate::activity::Activity;
@@ -135,6 +136,13 @@ pub struct PwrRoute {
     /// Try it's engine over the rules as edited, which Activity's Add a
     /// rule sheet also asks about collisions.
     pub(crate) probe: Probe,
+    pub(crate) engine_tasks: [Option<gpui_kit::Task<()>>; crate::engine_worker::LANES],
+    pub(crate) engine_worker: EngineWorker,
+    pub(crate) link_io: crate::engine_worker::IoWorker,
+    pub(crate) engine_revision: u64,
+    preview_request: u64,
+    config_request: u64,
+    config_pending: bool,
     /// The file's examples and tests, run on every save.
     pub tests: TestRuns,
     /// A Finicky config is in charge: the Rules screen is option 1b.
@@ -224,18 +232,10 @@ impl PwrRoute {
         store: RulesStore,
         cx: &mut Context<'_, Self>,
     ) -> Self {
-        // One engine for the config: the Rules screen describes it and Test a
-        // link resolves with it, so the config is evaluated once here. Test
-        // a link's runs see the OS's answers (modifier keys, running apps)
-        // and its console output, as the router's do.
-        let engine = config
-            .as_deref()
-            .map(|path| Engine::load(path, Rc::new(NativeHost::new()), Limits::default()));
         let in_charge = config
             .as_deref()
-            .zip(engine.as_ref())
-            .map(|(path, engine)| ConfigInCharge::new(path, home.as_deref(), engine.as_ref()));
-        let described = described(engine.as_ref());
+            .map(|path| pending_config(path, home.as_deref()));
+        let described = None;
         // Pausing and resuming from the tray changes the Overview's hero.
         let tray = crate::tray::model(cx).map(|model| cx.observe(&model, |_, _, cx| cx.notify()));
         let sync = crate::sync::feed(cx).map(|feed| {
@@ -247,6 +247,9 @@ impl PwrRoute {
         let updates = crate::update_notice::notices(cx)
             .map(|notices| cx.observe(&notices, |_, _, cx| cx.notify()));
         // Rules opens as a list: the editor appears on a click (or Down).
+        let config_pending = config.is_some();
+        let engine_worker = EngineWorker::new();
+        let link_io = crate::engine_worker::IoWorker::new();
         let mut this = Self {
             // A Tab stop, so Tab comes back round to the list and map keys.
             focus: cx.focus_handle().tab_stop(true),
@@ -257,14 +260,22 @@ impl PwrRoute {
             selection: None,
             rail: None,
             probe: Probe::at_home(config.clone(), home.as_deref(), store.edited()),
+            engine_tasks: std::array::from_fn(|_| None),
+            engine_revision: 0,
+            preview_request: 0,
+            config_request: 0,
+            config_pending,
             tests: TestRuns::new(config.clone(), store.edited()),
             test: TestLink::new(
                 config,
                 home.as_deref(),
-                engine.and_then(Result::ok),
+                engine_worker.client(),
+                link_io.client(),
                 store.written(),
                 cx,
             ),
+            engine_worker,
+            link_io,
             store,
             home,
             config: in_charge,
@@ -297,10 +308,11 @@ impl PwrRoute {
         }
         let shown = this.config.as_ref().map(|config| config.path.clone());
         this.activity.set_config(shown, cx);
+        this.describe_config(cx);
         this.rebuild_rail(cx);
         // The file's examples and tests, as it was opened.
         if this.tests.counts() != (0, 0) {
-            this.tests.run();
+            this.schedule_tests(cx);
         }
         this
     }
@@ -568,7 +580,7 @@ impl PwrRoute {
                 self.draft_note = None;
                 self.rebuild_rail_kept(cx);
                 if self.tests.counts() != (0, 0) {
-                    self.tests.run();
+                    self.schedule_tests(cx);
                 }
                 cx.notify();
                 true
@@ -653,6 +665,8 @@ impl PwrRoute {
     /// checked first: an edit over a file another writer changed is kept
     /// on screen and not saved, and the status says so.
     pub(crate) fn refresh(&mut self, cx: &mut Context<'_, Self>) {
+        self.engine_revision += 1;
+        self.engine_worker.cancel(Lane::Impact);
         // Undo import and Undo delete are good until the next edit.
         if let Some(done) = &mut self.last_import {
             done.undoable = false;
@@ -680,7 +694,8 @@ impl PwrRoute {
             // unsaved, so they are rebuilt from the file.
             self.rebuild_rail(cx);
         }
-        self.try_it();
+        self.try_it(cx);
+        self.refresh_add_rule_checks(cx);
         if self.store.needs_save() {
             self.schedule_save(cx);
         }
@@ -816,37 +831,42 @@ impl PwrRoute {
     /// The config in charge changed (the importer's Choose source, or its
     /// undo): the Rules screen, Test a link and the test runs follow it.
     pub fn set_config(&mut self, config: Option<PathBuf>, cx: &mut Context<'_, Self>) {
-        let engine = config
-            .as_deref()
-            .map(|path| Engine::load(path, Rc::new(NativeHost::new()), Limits::default()));
+        self.engine_revision += 1;
+        self.engine_worker.cancel(Lane::Impact);
+        self.config_pending = config.is_some();
         self.config = config
             .as_deref()
-            .zip(engine.as_ref())
-            .map(|(path, engine)| ConfigInCharge::new(path, self.home.as_deref(), engine.as_ref()));
+            .map(|path| pending_config(path, self.home.as_deref()));
         self.visual_rules_expanded = false;
-        self.described = described(engine.as_ref());
+        self.described = None;
         self.config_loaded = SystemTime::now();
+        self.describe_config(cx);
         self.probe = Probe::at_home(config.clone(), self.home.as_deref(), self.store.edited());
+        self.engine_tasks[Lane::Tests as usize] = None;
         self.tests = TestRuns::new(config.clone(), self.store.edited());
         self.test = TestLink::new(
             config,
             self.home.as_deref(),
-            engine.and_then(Result::ok),
+            self.engine_worker.client(),
+            self.link_io.client(),
             self.store.written(),
             cx,
         );
         if self.tests.counts() != (0, 0) {
-            self.tests.run();
+            self.schedule_tests(cx);
         }
         let shown = self.config.as_ref().map(|config| config.path.clone());
         self.activity.set_config(shown, cx);
-        self.try_it();
+        self.try_it(cx);
+        self.refresh_add_rule_checks(cx);
         cx.notify();
     }
 
     /// The store holds the file again: the rows, the selection (cleared
     /// when its row is gone), the rail, and every engine over the rules.
     fn reloaded(&mut self, cx: &mut Context<'_, Self>) {
+        self.engine_revision += 1;
+        self.engine_worker.cancel(Lane::Impact);
         // The rows may be other rules now: a menu, a drag or an Undo for
         // one of them would land on the wrong one.
         self.row_actions = crate::rule_menu::RowActions::default();
@@ -856,12 +876,13 @@ impl PwrRoute {
         self.follow_draft();
         self.rewrites = self.store.rewrites();
         self.handlers = self.store.handlers();
-        self.rebuild_rail(cx);
         self.test.set_rules(self.store.written());
         self.probe.set_rules(self.store.edited());
         self.tests.set_rules(self.store.edited());
+        self.rebuild_rail(cx);
+        self.refresh_add_rule_checks(cx);
         if self.tests.counts() != (0, 0) {
-            self.tests.run();
+            self.schedule_tests(cx);
         }
         // The Overview's rows are by number, and the file's may now be
         // other rules: what the pointer or the keyboard was on lets go.
@@ -934,11 +955,13 @@ impl PwrRoute {
                 rail.keep_from(old);
             }
         }
-        self.try_it();
+        self.try_it(cx);
     }
 
     /// Runs the rail's sample through the edited rules.
-    pub(crate) fn try_it(&mut self) {
+    pub(crate) fn try_it(&mut self, cx: &mut Context<'_, Self>) {
+        self.preview_request += 1;
+        self.engine_worker.cancel(Lane::Preview);
         let Some(selection) = self.selection else {
             return;
         };
@@ -968,8 +991,41 @@ impl PwrRoute {
             rail.sample.set(crate::try_it::sample_url(patterns));
         }
         let sample = rail.sample.text.clone();
-        rail.try_result = (!problems && !sample.trim().is_empty())
-            .then(|| self.probe.run(&sample, opener.as_deref(), selection));
+        rail.try_result = None;
+        if problems || sample.trim().is_empty() {
+            return;
+        }
+        let input = self.probe.input();
+        let request = self.preview_request;
+        let revision = self.engine_revision;
+        let result =
+            self.engine_worker
+                .submit(Lane::Preview, Duration::from_millis(100), move |_| {
+                    let mut probe = Probe::from_input(input);
+                    move || {
+                        let result = probe.run(&sample, opener.as_deref(), selection);
+                        Some((result, probe.stamps()))
+                    }
+                });
+        self.engine_tasks[Lane::Preview as usize] = Some(cx.spawn(async move |this, cx| {
+            if let Ok((result, stamps)) = crate::engine_worker::receive(result).await {
+                let _ = this.update(cx, |this, cx| {
+                    if this.preview_request == request
+                        && this.engine_revision == revision
+                        && this.selection == Some(selection)
+                    {
+                        if !crate::engine_worker::unchanged(&stamps) {
+                            this.try_it(cx);
+                            return;
+                        }
+                        if let Some(rail) = &mut this.rail {
+                            rail.try_result = Some(result);
+                        }
+                        cx.notify();
+                    }
+                });
+            }
+        }));
     }
 
     /// Copies a part of the build (the rail's build block) and shows its
@@ -1023,7 +1079,7 @@ impl PwrRoute {
         // Tests run on save: every example and test, against the rules as
         // they now stand.
         if self.tests.report().is_none() && self.tests.counts() != (0, 0) {
-            self.tests.run();
+            self.schedule_tests(cx);
         }
         cx.notify();
     }
@@ -1199,7 +1255,7 @@ impl PwrRoute {
             rail.sample.set(url);
             rail.sample_edited = true;
         }
-        self.try_it();
+        self.try_it(cx);
         self.focus_field(window, cx, |rail| rail.patterns.first());
         self.draft_from = Some((h, crate::editor::DraftFrom::TestLink));
         cx.notify();
@@ -1371,7 +1427,7 @@ impl PwrRoute {
                     if let Some(rail) = &mut self.rail {
                         rail.sample_edited = true;
                     }
-                    self.try_it();
+                    self.try_it(cx);
                     cx.notify();
                 } else {
                     self.apply_field(field, &text);
@@ -1382,7 +1438,7 @@ impl PwrRoute {
             Edit::Submit => {
                 match field {
                     Field::Sample => {
-                        self.try_it();
+                        self.try_it(cx);
                         cx.notify();
                     }
                     // Return in the rule's own fields saves the draft (Rule
@@ -1543,11 +1599,77 @@ impl PwrRoute {
     }
 }
 
-/// What a loaded config says about itself, for the Overview's map.
-fn described(engine: Option<&anyhow::Result<Engine>>) -> Option<Description> {
-    engine
-        .and_then(|engine| engine.as_ref().ok())
-        .and_then(|engine| engine.describe().ok().flatten())
+impl PwrRoute {
+    pub(crate) fn schedule_tests(&mut self, cx: &mut Context<'_, Self>) {
+        let (request, config, rules) = self.tests.begin();
+        let result = self
+            .engine_worker
+            .submit(Lane::Tests, Duration::ZERO, move |_| {
+                crate::try_it::test_steps(config, rules)
+            });
+        self.engine_tasks[Lane::Tests as usize] = Some(cx.spawn(async move |this, cx| {
+            if let Ok((report, stamps)) = crate::engine_worker::receive(result).await {
+                let _ = this.update(cx, |this, cx| {
+                    if !crate::engine_worker::unchanged(&stamps) {
+                        if this.tests.is_current(&request) {
+                            this.schedule_tests(cx);
+                        }
+                        return;
+                    }
+                    if this.tests.complete(request, report) {
+                        cx.notify();
+                    }
+                });
+            }
+        }));
+    }
+
+    fn describe_config(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(path) = self.config.as_ref().map(|config| config.file.clone()) else {
+            self.config_request += 1;
+            self.engine_worker.cancel(Lane::Config);
+            return;
+        };
+        let home = self.home.clone();
+        self.config_request += 1;
+        let request = self.config_request;
+        let result = self.engine_worker.once(Lane::Config, move || {
+            let before = crate::engine_worker::primary(Some(&path));
+            let engine = Engine::load(&path, Rc::new(NativeHost::new()), Limits::default());
+            let description = engine
+                .as_ref()
+                .ok()
+                .and_then(|engine| engine.describe().ok().flatten());
+            let config = ConfigInCharge::new(&path, home.as_deref(), engine.as_ref());
+            let stamps = engine.as_ref().map_or_else(
+                |_| before.clone(),
+                |engine| crate::engine_worker::dependencies(before.clone(), engine),
+            );
+            (config, description, stamps)
+        });
+        self.engine_tasks[Lane::Config as usize] = Some(cx.spawn(async move |this, cx| {
+            if let Ok((config, description, stamps)) = crate::engine_worker::receive(result).await {
+                let _ = this.update(cx, |this, cx| {
+                    if this.config_request == request {
+                        if !crate::engine_worker::unchanged(&stamps) {
+                            this.describe_config(cx);
+                            return;
+                        }
+                        this.config = Some(config);
+                        this.config_pending = false;
+                        this.described = description;
+                        cx.notify();
+                    }
+                });
+            }
+        }));
+    }
+}
+
+fn pending_config(path: &std::path::Path, home: Option<&std::path::Path>) -> ConfigInCharge {
+    let mut pending = ConfigInCharge::new(path, home, Err(&anyhow::anyhow!("Reading config…")));
+    pending.problem = None;
+    pending
 }
 
 /// Every main window checks the file now: an in-process agent write
@@ -1638,6 +1760,16 @@ impl Render for PwrRoute {
         // the Overview, so they agree.
         let status = overview::status(self, cx);
         let pane = match (self.screen, &self.config) {
+            (Screen::Overview | Screen::Rules, Some(_)) if self.config_pending => div()
+                .flex_1()
+                .p(theme::px(24.0))
+                .child(theme::text(
+                    "Reading config…",
+                    13.0,
+                    500.0,
+                    theme::text_muted(),
+                ))
+                .into_any_element(),
             (Screen::Overview, _) => overview::pane(self, &status, window, cx).into_any_element(),
             (Screen::Rules, None) => rules_view::pane(self, cx).into_any_element(),
             (Screen::Rules, Some(config)) => config_view::pane(self, config, cx).into_any_element(),
@@ -1742,7 +1874,7 @@ impl crate::text_field::InputOwner for PwrRoute {
                 if let Some(rail) = &mut self.rail {
                     rail.sample_edited = true;
                 }
-                self.try_it();
+                self.try_it(cx);
             }
             Field::Example | Field::Becomes | Field::Name => {}
             _ => {

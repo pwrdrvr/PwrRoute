@@ -73,6 +73,7 @@ pub struct Actions {
     pub menu_was: Option<RowKey>,
     pub sheet: Option<AddRule>,
     pub note: Option<(RowKey, String)>,
+    example_saves: std::collections::VecDeque<RowKey>,
 }
 
 /// The "⋯" menu of one row, resolved when it opens.
@@ -196,6 +197,10 @@ pub struct AddRule {
     pub pattern: TextField,
     pub collisions: Vec<Collision>,
     pub collision_error: Option<String>,
+    match_request: std::rc::Rc<()>,
+    check_request: std::rc::Rc<()>,
+    verified: Option<(engine::Rule, usize, u64, crate::engine_worker::Stamps)>,
+    open_after_check: bool,
     /// Matches: hosts near the link's (its own, each domain offered and
     /// its `www`), each with whether the patterns take the link on that
     /// host. Empty when the sheet offers no domain.
@@ -249,6 +254,8 @@ pub enum ProblemKind {
     /// Another rule, or the config, takes the link first: a second click
     /// adds the rule anyway.
     Shadowed,
+    /// Routing could not be checked; an explicit second click can save it.
+    Unchecked,
 }
 
 impl AddRule {
@@ -285,6 +292,10 @@ impl AddRule {
             pattern: TextField::new(first, cx),
             collisions: Vec::new(),
             collision_error: None,
+            match_request: std::rc::Rc::new(()),
+            check_request: std::rc::Rc::new(()),
+            verified: None,
+            open_after_check: false,
             hosts: Vec::new(),
             rules_first: true,
             config: None,
@@ -866,6 +877,62 @@ fn test_for(record: &DispatchRecord) -> Option<RouteTest> {
     })
 }
 
+fn check_trace(
+    trace: &engine::Trace,
+    rules: &engine::RulesFile,
+    at: usize,
+    rules_first: bool,
+    config: Option<&str>,
+) -> Option<Problem> {
+    let winner = trace.winner()?;
+    let shadowed = |text: String, advice| {
+        Some(Problem {
+            kind: ProblemKind::Shadowed,
+            text,
+            advice,
+        })
+    };
+    match (winner.source, winner.stage) {
+        (Source::Rules, Stage::Handler) if winner.index == at => None,
+        // An earlier rule; a later one means this rule missed.
+        (Source::Rules, Stage::Handler) if winner.index < at => {
+            let pattern = rules
+                .rules
+                .get(winner.index)
+                .and_then(|r| r.patterns.get(winner.pattern.unwrap_or(0)))
+                .map(|p| format!(" ({p})"))
+                .unwrap_or_default();
+            shadowed(
+                format!(
+                    "Rule {}{pattern} takes this link first, so this rule would never see \
+                         it.",
+                    winner.index + 1
+                ),
+                "Put it at the top, or click Add anyway.",
+            )
+        }
+        // Config handlers run first only under the config's order;
+        // under PwrRoute's, one winning means this rule missed.
+        (Source::Config, Stage::Handler) if !rules_first => {
+            let config = config.unwrap_or("the config");
+            shadowed(
+                format!(
+                    "Config handler {} of {config} takes this link first, and visual rules \
+                         run after the config, so this rule would never see it.",
+                    winner.index + 1
+                ),
+                "Route this link in the config instead, or click Add anyway.",
+            )
+        }
+        _ => shadowed(
+            "This rule does not match the link as the rules see it, so the link would \
+                 still go where it goes now."
+                .to_owned(),
+            "Check the pattern, or click Add anyway.",
+        ),
+    }
+}
+
 impl PwrRoute {
     /// `rules.json`'s rules run before the config's handlers: no config
     /// is in charge, or the file says `"precedence": "pwrroute"`.
@@ -916,7 +983,119 @@ impl PwrRoute {
             save,
             added: None,
         });
+        if self.needs_example_probe(&record) {
+            if let Some(menu) = &mut self.actions.menu {
+                menu.save = None;
+            }
+            self.probe_record_example(key, false, cx);
+        }
         cx.notify();
+    }
+
+    fn needs_example_probe(&self, record: &DispatchRecord) -> bool {
+        record.privacy == Privacy::Full
+            && record.browser.is_some()
+            && matches!(
+                matched(record),
+                Some(Matched::Rule { .. } | Matched::Unreported)
+            )
+            && !(matches!(matched(record), Some(Matched::Rule { index }) if self.rules_unchanged_since(record.received_at) && self.still_routes(index, record)))
+    }
+
+    fn probe_record_example(&mut self, key: RowKey, save: bool, cx: &mut Context<'_, Self>) {
+        if save {
+            if self.actions.example_saves.contains(&key) {
+                return;
+            }
+            if self.actions.example_saves.len() >= 32 {
+                self.actions.note = Some((
+                    key,
+                    "Too many example saves are waiting. Try again after they finish.".into(),
+                ));
+                cx.notify();
+                return;
+            }
+            self.actions.example_saves.push_back(key);
+            if self.actions.example_saves.len() > 1 {
+                return;
+            }
+        }
+        self.start_example_probe(key, save, cx);
+    }
+
+    fn finish_example_save(&mut self, key: RowKey, cx: &mut Context<'_, Self>) {
+        if self.actions.example_saves.front() == Some(&key) {
+            self.actions.example_saves.pop_front();
+        }
+        if let Some(next) = self.actions.example_saves.front().copied() {
+            self.start_example_probe(next, true, cx);
+        }
+    }
+
+    fn start_example_probe(&mut self, key: RowKey, save: bool, cx: &mut Context<'_, Self>) {
+        let Some(record) = record(key, cx) else {
+            if save {
+                self.finish_example_save(key, cx);
+            }
+            return;
+        };
+        let revision = self.engine_revision;
+        let rules = self.store.written();
+        let input = self.probe.input();
+        let url = matched_url(&record).to_owned();
+        let opener = engine_opener(&record);
+        let lane = if save {
+            crate::engine_worker::Lane::ExampleSave
+        } else {
+            crate::engine_worker::Lane::Activity
+        };
+        let result = self.engine_worker.once(lane, move || {
+            let mut probe = crate::try_it::Probe::from_input(input).with_rules(rules);
+            let trace = probe.trace(&url, opener.as_ref());
+            let winner = trace.map(|trace| {
+                trace
+                    .winner()
+                    .filter(|step| {
+                        step.source == pwrroute_engine::Source::Rules
+                            && step.stage == pwrroute_engine::Stage::Handler
+                    })
+                    .map(|step| step.index)
+            });
+            (winner, probe.stamps())
+        });
+        self.engine_tasks[lane as usize] = Some(cx.spawn(async move |this, cx| {
+            if let Ok((winner, stamps)) = crate::engine_worker::receive(result).await {
+                let _ = this.update(cx, |this, cx| {
+                    this.sync_with_disk(cx);
+                    if this.engine_revision != revision || !crate::engine_worker::unchanged(&stamps) {
+                        if save {
+                            this.actions.note = Some((key, "The rules changed before the example could be saved. Try again.".into()));
+                        }
+                    } else if let Some(record) = crate::activity_actions::record(key, cx).filter(|r| r.privacy == Privacy::Full) {
+                        match winner {
+                            Ok(handler) if save => this.save_example_to(key, handler, cx),
+                            Ok(handler) => {
+                                let choice = handler.map_or_else(
+                                    || Save::Test { expects: opened_label(&record) },
+                                    |handler| Save::Example {
+                                        handler,
+                                        pattern: this.handlers.get(handler).and_then(|h| h.patterns.first().cloned()),
+                                    },
+                                );
+                                if let Some(menu) = &mut this.actions.menu && menu.key == key {
+                                    menu.save = Some(choice);
+                                }
+                            }
+                            Err(_) => {
+                                this.actions.note = Some((key, "The rules could not be checked. Try again after fixing the config.".into()));
+                            }
+                        }
+                    }
+                    if save { this.finish_example_save(key, cx); }
+                    cx.notify();
+                });
+            }
+        }));
     }
 
     /// The `rules.json` rule a record's link joins as an example: the one
@@ -935,11 +1114,7 @@ impl PwrRoute {
             {
                 Some(index)
             }
-            Some(Matched::Rule { .. } | Matched::Unreported) => {
-                let url = matched_url(record).to_owned();
-                let opener = engine_opener(record);
-                self.probe.winning_handler(&url, opener.as_ref())
-            }
+            Some(Matched::Rule { .. } | Matched::Unreported) => None,
             Some(Matched::Default { .. } | Matched::Handler { .. }) | None => None,
         }
     }
@@ -1097,6 +1272,12 @@ impl PwrRoute {
     /// Closes the sheet without adding anything, and gives the list the
     /// keyboard back (the sheet's field may have had it).
     pub fn cancel_add_rule(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        self.engine_tasks[crate::engine_worker::Lane::Collisions as usize] = None;
+        self.engine_tasks[crate::engine_worker::Lane::CheckRule as usize] = None;
+        self.engine_worker
+            .cancel(crate::engine_worker::Lane::Collisions);
+        self.engine_worker
+            .cancel(crate::engine_worker::Lane::CheckRule);
         self.actions.sheet = None;
         window.focus(&self.focus, cx);
         cx.notify();
@@ -1104,7 +1285,14 @@ impl PwrRoute {
 
     /// The recent links in memory the sheet's pattern would also catch,
     /// by Finicky's own matching.
-    fn find_collisions(&mut self, sheet: &mut AddRule, cx: &App) {
+    fn find_collisions(&mut self, sheet: &mut AddRule, cx: &mut Context<'_, Self>) {
+        sheet.check_request = std::rc::Rc::new(());
+        sheet.verified = None;
+        self.engine_worker
+            .cancel(crate::engine_worker::Lane::CheckRule);
+        sheet.match_request = std::rc::Rc::new(());
+        self.engine_worker
+            .cancel(crate::engine_worker::Lane::Collisions);
         sheet.collisions.clear();
         sheet.collision_error = None;
         sheet.hosts.clear();
@@ -1127,6 +1315,7 @@ impl PwrRoute {
                         Some(app) => sent_by(r, app),
                         None => true,
                     })
+                    .take(crate::rule_menu::IMPACT_OF)
                     .cloned()
                     .collect()
             })
@@ -1134,32 +1323,100 @@ impl PwrRoute {
         // Matches' hosts and the recent links, probed together: one engine
         // call per pattern.
         let nearby = sheet.nearby_hosts();
-        let urls: Vec<&str> = nearby
+        let urls: Vec<String> = nearby
             .iter()
-            .map(|(_, link)| link.as_str())
-            .chain(records.iter().map(matched_url))
+            .map(|(_, link)| link.clone())
+            .chain(records.iter().map(|r| matched_url(r).to_owned()))
             .collect();
-        match patterns_catch(&mut self.probe, &patterns, &urls) {
-            Ok(hits) => {
-                let (near, recent) = hits.split_at(nearby.len());
-                sheet.hosts = nearby
-                    .iter()
-                    .zip(near)
-                    .map(|((host, _), hit)| (host.clone(), *hit))
-                    .collect();
-                sheet.collisions = records
-                    .iter()
-                    .zip(recent)
-                    .filter(|(_, hit)| **hit)
-                    .map(|(r, _)| Collision {
-                        time: clock(r.received_at),
-                        url: matched_url(r).to_owned(),
-                        opened: opened_label(r),
-                        took: Took::of(r),
-                    })
-                    .collect();
-            }
-            Err(error) => sheet.collision_error = Some(error),
+        let request = sheet.match_request.clone();
+        let key = sheet.key;
+        let revision = self.engine_revision;
+        let input = self.probe.input();
+        sheet.collision_error = Some("Checking matches…".into());
+        let result = self.engine_worker.submit(
+            crate::engine_worker::Lane::Collisions,
+            std::time::Duration::from_millis(100),
+            move |_| {
+                let mut probe = crate::try_it::Probe::from_input(input);
+                let mut caught = vec![false; urls.len()];
+                let mut pattern = 0;
+                let mut offset = 0;
+                move || {
+                    if pattern == patterns.len() || urls.is_empty() {
+                        return Some((Ok(caught.clone()), probe.stamps()));
+                    }
+                    let end = (offset + 32).min(urls.len());
+                    let refs: Vec<&str> = urls[offset..end].iter().map(String::as_str).collect();
+                    match patterns_catch(&mut probe, &patterns[pattern..pattern + 1], &refs) {
+                        Ok(hits) => {
+                            for (at, hit) in hits.into_iter().enumerate() {
+                                caught[offset + at] |= hit;
+                            }
+                        }
+                        Err(error) => return Some((Err(error), probe.stamps())),
+                    }
+                    offset = end;
+                    if offset == urls.len() {
+                        offset = 0;
+                        pattern += 1;
+                    }
+                    None
+                }
+            },
+        );
+        self.engine_tasks[crate::engine_worker::Lane::Collisions as usize] =
+            Some(cx.spawn(async move |this, cx| {
+                if let Ok((result, stamps)) = crate::engine_worker::receive(result).await {
+                    let _ = this.update(cx, |this, cx| {
+                        let Some(sheet) = &mut this.actions.sheet else {
+                            return;
+                        };
+                        if sheet.key != key
+                            || !std::rc::Rc::ptr_eq(&sheet.match_request, &request)
+                            || this.engine_revision != revision
+                        {
+                            return;
+                        }
+                        if !crate::engine_worker::unchanged(&stamps) {
+                            sheet.collision_error =
+                                Some("Config changed. Edit the pattern to check it again.".into());
+                            cx.notify();
+                            return;
+                        }
+                        match result {
+                            Ok(hits) => {
+                                let (near, recent) = hits.split_at(nearby.len());
+                                sheet.hosts = nearby
+                                    .iter()
+                                    .zip(near)
+                                    .map(|((host, _), hit)| (host.clone(), *hit))
+                                    .collect();
+                                sheet.collisions = records
+                                    .iter()
+                                    .zip(recent)
+                                    .filter(|(_, hit)| **hit)
+                                    .map(|(r, _)| Collision {
+                                        time: clock(r.received_at),
+                                        url: matched_url(r).to_owned(),
+                                        opened: opened_label(r),
+                                        took: Took::of(r),
+                                    })
+                                    .collect();
+                                sheet.collision_error = None;
+                            }
+                            Err(error) => sheet.collision_error = Some(error),
+                        }
+                        cx.notify();
+                    });
+                }
+            }));
+    }
+
+    pub(crate) fn refresh_add_rule_checks(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(mut sheet) = self.actions.sheet.take() {
+            sheet.problem = None;
+            self.find_collisions(&mut sheet, cx);
+            self.actions.sheet = Some(sheet);
         }
     }
 
@@ -1214,6 +1471,10 @@ impl PwrRoute {
     pub fn set_add_rule(&mut self, change: impl FnOnce(&mut AddRule), cx: &mut Context<'_, Self>) {
         if let Some(sheet) = &mut self.actions.sheet {
             change(sheet);
+            sheet.check_request = std::rc::Rc::new(());
+            sheet.verified = None;
+            self.engine_worker
+                .cancel(crate::engine_worker::Lane::CheckRule);
             sheet.problem = None;
             cx.notify();
         }
@@ -1229,6 +1490,14 @@ impl PwrRoute {
     /// its pattern misses) keeps the sheet open and says why; a second
     /// click adds it anyway.
     pub fn add_rule_from_sheet(&mut self, cx: &mut Context<'_, Self>) -> bool {
+        self.add_rule_checked(false, cx)
+    }
+
+    fn add_rule_checked(&mut self, open_after: bool, cx: &mut Context<'_, Self>) -> bool {
+        if let Some(sheet) = &mut self.actions.sheet {
+            sheet.open_after_check = open_after;
+        }
+        self.sync_with_disk(cx);
         let Some(sheet) = &self.actions.sheet else {
             return false;
         };
@@ -1239,19 +1508,23 @@ impl PwrRoute {
             Position::Top => 0,
             Position::Bottom => self.store.handler_count(),
         };
+        if !sheet
+            .verified
+            .as_ref()
+            .is_some_and(|(checked, index, revision, stamps)| {
+                checked == &rule
+                    && *index == at
+                    && *revision == self.engine_revision
+                    && crate::engine_worker::unchanged(stamps)
+            })
+        {
+            self.check_new_rule(rule, at, cx);
+            return false;
+        }
         let warning = match &sheet.problem {
             Some(problem) if problem.kind == ProblemKind::Duplicate => return false,
             Some(problem) => Some(problem.text.clone()),
-            None => {
-                if let Some(problem) = self.check_new_rule(&rule, at) {
-                    if let Some(sheet) = &mut self.actions.sheet {
-                        sheet.problem = Some(problem);
-                    }
-                    cx.notify();
-                    return false;
-                }
-                None
-            }
+            None => None,
         };
         let Some(sheet) = self.actions.sheet.take() else {
             return false;
@@ -1324,7 +1597,7 @@ impl PwrRoute {
         else {
             return;
         };
-        if self.add_rule_from_sheet(cx) {
+        if self.add_rule_checked(true, cx) {
             self.open_not_opened(key, how, cx);
         }
     }
@@ -1333,72 +1606,92 @@ impl PwrRoute {
     /// file already has it, or the engine over the file with it added
     /// (and the config in charge) sends the link elsewhere. `None` when it
     /// would take the link, or the probe fails (the tests report that).
-    fn check_new_rule(&mut self, rule: &engine::Rule, at: usize) -> Option<Problem> {
-        let sheet = self.actions.sheet.as_ref()?;
-        let mut rules = self.store.edited();
-        if let Some(same) = rules.rules.iter().position(|r| same_rule(r, rule)) {
-            return Some(Problem {
+    fn check_new_rule(&mut self, rule: engine::Rule, at: usize, cx: &mut Context<'_, Self>) {
+        let Some(sheet) = &mut self.actions.sheet else {
+            return;
+        };
+        let mut rules = self.store.written();
+        if let Some(same) = rules.rules.iter().position(|r| same_rule(r, &rule)) {
+            sheet.problem = Some(Problem {
                 kind: ProblemKind::Duplicate,
                 text: format!("Rule {} is already this rule. Nothing was added.", same + 1),
                 advice: "Change the pattern, browser or position to add a different rule.",
             });
+            sheet.verified = Some((rule, at, self.engine_revision, Vec::new()));
+            cx.notify();
+            return;
         }
+        sheet.check_request = std::rc::Rc::new(());
+        let request = sheet.check_request.clone();
+        let key = sheet.key;
+        let open_after = sheet.open_after_check;
+        let open_as = sheet.open_as().unwrap_or(OpenAs::Rules);
+        let url = sheet.url.clone();
+        let opener = sheet.opener.clone();
+        sheet.problem = None;
         rules.rules.insert(at, rule.clone());
-        let trace = self
-            .probe
-            .with_rules(rules.clone())
-            .trace(&sheet.url, sheet.opener.as_ref())
-            .ok()?;
-        let winner = trace.winner()?;
-        let shadowed = |text: String, advice| {
-            Some(Problem {
-                kind: ProblemKind::Shadowed,
-                text,
-                advice,
-            })
-        };
-        match (winner.source, winner.stage) {
-            (Source::Rules, Stage::Handler) if winner.index == at => None,
-            // An earlier rule; a later one means this rule missed.
-            (Source::Rules, Stage::Handler) if winner.index < at => {
-                let pattern = rules
-                    .rules
-                    .get(winner.index)
-                    .and_then(|r| r.patterns.get(winner.pattern.unwrap_or(0)))
-                    .map(|p| format!(" ({p})"))
-                    .unwrap_or_default();
-                shadowed(
-                    format!(
-                        "Rule {}{pattern} takes this link first, so this rule would never see \
-                         it.",
-                        winner.index + 1
-                    ),
-                    "Put it at the top, or click Add anyway.",
-                )
-            }
-            // Config handlers run first only under the config's order;
-            // under PwrRoute's, one winning means this rule missed.
-            (Source::Config, Stage::Handler) if !self.rules_first() => {
-                let config = self
-                    .config
-                    .as_ref()
-                    .map_or("the config", |config| config.path.as_str());
-                shadowed(
-                    format!(
-                        "Config handler {} of {config} takes this link first, and visual rules \
-                         run after the config, so this rule would never see it.",
-                        winner.index + 1
-                    ),
-                    "Route this link in the config instead, or click Add anyway.",
-                )
-            }
-            _ => shadowed(
-                "This rule does not match the link as the rules see it, so the link would \
-                 still go where it goes now."
-                    .to_owned(),
-                "Check the pattern, or click Add anyway.",
-            ),
-        }
+        let input = self.probe.input();
+        let revision = self.engine_revision;
+        let first = self.rules_first();
+        let config = self.config.as_ref().map(|c| c.path.clone());
+        let result = self
+            .engine_worker
+            .once(crate::engine_worker::Lane::CheckRule, move || {
+                let mut probe = crate::try_it::Probe::from_input(input).with_rules(rules.clone());
+                let result = probe
+                    .trace(&url, opener.as_ref())
+                    .map(|trace| check_trace(&trace, &rules, at, first, config.as_deref()));
+                (result, probe.stamps())
+            });
+        self.engine_tasks[crate::engine_worker::Lane::CheckRule as usize] =
+            Some(cx.spawn(async move |this, cx| {
+                if let Ok((result, stamps)) = crate::engine_worker::receive(result).await {
+                    let _ = this.update(cx, |this, cx| {
+                        this.sync_with_disk(cx);
+                        let Some(sheet) = &mut this.actions.sheet else {
+                            return;
+                        };
+                        let current_at = match sheet.position {
+                            Position::Top => 0,
+                            Position::Bottom => this.store.handler_count(),
+                        };
+                        if sheet.key != key
+                            || !std::rc::Rc::ptr_eq(&sheet.check_request, &request)
+                            || sheet.rule().as_ref() != Some(&rule)
+                            || current_at != at
+                            || this.engine_revision != revision
+                        {
+                            return;
+                        }
+                        if !crate::engine_worker::unchanged(&stamps) {
+                            sheet.collision_error =
+                                Some("Config changed. Check this rule again.".into());
+                            cx.notify();
+                            return;
+                        }
+                        match result {
+                            Ok(problem) => {
+                                let ready = problem.is_none();
+                                sheet.problem = problem;
+                                sheet.verified = Some((rule, at, revision, stamps));
+                                if ready && this.add_rule_checked(open_after, cx) && open_after {
+                                    this.open_not_opened(key, open_as, cx);
+                                }
+                            }
+                            Err(error) => {
+                                sheet.collision_error = None;
+                                sheet.problem = Some(Problem {
+                                    kind: ProblemKind::Unchecked,
+                                    text: format!("The config could not be checked: {error}"),
+                                    advice: "Fix the config and try again, or click Add anyway.",
+                                });
+                                sheet.verified = Some((rule, at, revision, stamps));
+                            }
+                        }
+                        cx.notify();
+                    });
+                }
+            }));
     }
 
     /// Show in Rules: the handler Add rule just added, selected, with the
@@ -1425,8 +1718,23 @@ impl PwrRoute {
         if record.privacy != Privacy::Full {
             return;
         }
+        self.sync_with_disk(cx);
+        if self.needs_example_probe(&record) {
+            self.probe_record_example(key, true, cx);
+            return;
+        }
+        let handler = self.example_rule(&record);
+        self.save_example_to(key, handler, cx);
+    }
+
+    fn save_example_to(&mut self, key: RowKey, handler: Option<usize>, cx: &mut Context<'_, Self>) {
+        let Some(record) =
+            crate::activity_actions::record(key, cx).filter(|r| r.privacy == Privacy::Full)
+        else {
+            return;
+        };
         let url = matched_url(&record).to_owned();
-        match self.example_rule(&record) {
+        match handler {
             Some(handler) => {
                 // A command on the saved rule: it reaches the file even
                 // while the rule is the editor's draft.

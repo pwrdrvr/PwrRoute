@@ -223,6 +223,9 @@ pub struct FirstRunModel {
     /// What the Everything else select offers: the browsers found on this
     /// machine.
     pub browsers: Vec<BrowserChoice>,
+    /// A shared scan is pending; cached choices stay intact until completion.
+    pub browsers_loading: bool,
+    pub browser_error: Option<String>,
     /// The config step's subject. `None`: no Finicky config was found, and
     /// the window has two steps.
     pub finicky: Option<FinickyConfig>,
@@ -264,6 +267,34 @@ pub struct FirstRunModel {
 }
 
 impl FirstRunModel {
+    /// Apply a completed browser snapshot without replacing setup choices.
+    /// A late scan can discover the profile-access step for the first time.
+    pub(crate) fn refresh_browsers(&mut self, browsers: Vec<BrowserChoice>, access_pane: bool) {
+        let before = self.still_blocked().len();
+        self.browsers = browsers;
+        let blocked: Vec<_> = self
+            .browsers
+            .iter()
+            .filter(|browser| browser.profiles_blocked)
+            .map(|browser| browser.label.clone())
+            .collect();
+        if self.access.is_none() && access_pane && !blocked.is_empty() {
+            self.access = Some(ProfileAccess {
+                browsers: blocked,
+                ..Default::default()
+            });
+        } else if let Some(access) = self.access.as_mut() {
+            for label in blocked {
+                if !access.browsers.iter().any(|known| known.name == label.name) {
+                    access.browsers.push(label);
+                }
+            }
+            if before > self.still_blocked().len() {
+                self.access.as_mut().unwrap().still_blocked = false;
+            }
+        }
+    }
+
     /// The design's 4a: a config found with 3 of its rules importable, the
     /// Everything else browser preselected from its default.
     #[cfg(test)]
@@ -333,6 +364,9 @@ impl FirstRunModel {
     /// browser found. With the config's browser comes its profile, when
     /// the browser has one by that name. `None` with no browsers at all.
     pub fn preselection(&self) -> Option<(Fallback, Picked)> {
+        if self.browsers_loading || self.browser_error.is_some() {
+            return None;
+        }
         let find = |value: &str| {
             self.browsers.iter().find(|choice| {
                 choice.value.eq_ignore_ascii_case(value)
@@ -503,6 +537,12 @@ impl FirstRunModel {
 
     /// The access step's paragraph (6a-6c).
     pub fn access_detail(&self) -> String {
+        if self.browsers_loading {
+            return "Reading browser profiles…".into();
+        }
+        if let Some(error) = &self.browser_error {
+            return error.clone();
+        }
         let Some(access) = &self.access else {
             return String::new();
         };
@@ -654,6 +694,12 @@ impl FirstRunModel {
 
     /// The Everything else step's paragraph.
     pub fn everything_else_detail(&self) -> String {
+        if self.browsers_loading {
+            return "Looking for browsers… Your saved choice stays in place.".into();
+        }
+        if let Some(error) = &self.browser_error {
+            return error.clone();
+        }
         if self.browsers.is_empty() {
             return format!(
                 "No browsers found on {}. PwrRoute needs at least one to send links to.",
@@ -1049,8 +1095,16 @@ type ImportHook = Rc<dyn Fn(ImportChoice, ImportReply, &mut App)>;
 /// A hook that answers: the browsers read again, or why a request failed.
 type Ask<T> = Rc<dyn Fn(&mut App) -> T>;
 
+/// A copy's historical result and current saved facts. If the current file
+/// cannot be read, retain the window's choices and show the summary only.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RulesImportResult {
+    pub current: Option<Imported>,
+    pub summary: String,
+}
+
 /// A copied file’s resulting rules and test summary; None when cancelled.
-pub type RulesImportReply = Rc<dyn Fn(Option<(Imported, String)>, &mut App)>;
+pub type RulesImportReply = Rc<dyn Fn(Option<RulesImportResult>, &mut App)>;
 pub type RulesImportHook = Rc<dyn Fn(std::path::PathBuf, RulesImportReply, &mut App)>;
 
 /// How the window was left.
@@ -1151,6 +1205,7 @@ pub struct FirstRun {
     /// field closes its list (the press outside it) and the click must not
     /// open it again.
     was_picking: Picking,
+    access_recheck: Option<(usize, bool)>,
 }
 
 impl FirstRun {
@@ -1162,6 +1217,7 @@ impl FirstRun {
             menu_bar: MenuBar::listed("Set up PwrRoute", cx),
             picking: Picking::None,
             was_picking: Picking::None,
+            access_recheck: None,
         }
     }
 
@@ -1169,6 +1225,9 @@ impl FirstRun {
     /// [`FirstRunModel::preselection`] names and saves it at once, so the
     /// step starts done and stays editable.
     pub fn preselect(&mut self, cx: &mut Context<'_, Self>) {
+        if self.model.browsers_loading || self.model.browser_error.is_some() {
+            return;
+        }
         if self.model.fallback.is_some() {
             return;
         }
@@ -1211,6 +1270,9 @@ impl FirstRun {
 
     /// A browser from the Everything else list, at its default profile.
     fn choose_fallback(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        if self.model.browsers_loading || self.model.browser_error.is_some() {
+            return;
+        }
         self.picking = Picking::None;
         if let Some(choice) = self.model.browsers.get(index).cloned() {
             let label = choice.label.clone();
@@ -1230,6 +1292,9 @@ impl FirstRun {
     /// A profile from the profile list: 0 is "Default profile", then the
     /// chosen browser's profiles in order.
     fn choose_profile(&mut self, index: usize, cx: &mut Context<'_, Self>) {
+        if self.model.browsers_loading || self.model.browser_error.is_some() {
+            return;
+        }
         self.picking = Picking::None;
         let Some(browser) = self.model.fallback_choice().cloned() else {
             cx.notify();
@@ -1287,13 +1352,44 @@ impl FirstRun {
             return;
         }
         let before = self.model.still_blocked().len();
-        self.model.browsers = (self.hooks.on_reread)(cx);
-        let after = self.model.still_blocked().len();
-        if let Some(access) = self.model.access.as_mut() {
-            if asked {
-                access.still_blocked = after > 0 && after == before;
-            } else if after < before {
-                access.still_blocked = false;
+        let (before, earlier_asked) = self.access_recheck.unwrap_or((before, false));
+        self.access_recheck = Some((before, asked || earlier_asked));
+        let browsers = (self.hooks.on_reread)(cx);
+        self.browser_scan_completed(
+            browsers,
+            crate::browser_scan::is_loading(cx),
+            crate::browser_scan::error(cx),
+            cx,
+        );
+    }
+
+    /// Apply a terminal shared scan without losing the explicit Check again
+    /// request when activation also asks for a coalesced reread.
+    pub(crate) fn browser_scan_completed(
+        &mut self,
+        browsers: Vec<BrowserChoice>,
+        loading: bool,
+        error: Option<String>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        let before = self.model.still_blocked().len();
+        self.model.browsers_loading = loading;
+        self.model.browser_error = error;
+        if loading {
+            cx.notify();
+            return;
+        }
+        let (before, asked) = self.access_recheck.take().unwrap_or((before, false));
+        if self.model.browser_error.is_none() {
+            self.model
+                .refresh_browsers(browsers, cfg!(target_os = "macos"));
+            let after = self.model.still_blocked().len();
+            if let Some(access) = self.model.access.as_mut() {
+                if asked {
+                    access.still_blocked = after > 0 && after == before;
+                } else if after < before {
+                    access.still_blocked = false;
+                }
             }
         }
         cx.notify();
@@ -1310,7 +1406,12 @@ impl FirstRun {
     /// "Look again": read the machine's browsers again, and pick one when
     /// there is one now.
     fn look_again(&mut self, cx: &mut Context<'_, Self>) {
-        self.model.browsers = (self.hooks.on_rescan)(cx);
+        let browsers = (self.hooks.on_rescan)(cx);
+        self.model.browsers_loading = crate::browser_scan::is_loading(cx);
+        self.model.browser_error = crate::browser_scan::error(cx);
+        if !self.model.browsers_loading && self.model.browser_error.is_none() {
+            self.model.browsers = browsers;
+        }
         self.preselect(cx);
         cx.notify();
     }
@@ -2152,16 +2253,19 @@ fn rules_import_card(model: &FirstRunModel, cx: &mut Context<'_, FirstRun>) -> D
                     let reply: RulesImportReply = Rc::new(move |result, cx| {
                         let _ = weak.update(cx, |this, cx| {
                             this.model.copying_rules = false;
-                            if let Some((imported, status)) = result {
-                                this.model.rules = imported.rules;
-                                if !imported.default_browser.is_empty() {
-                                    this.model.fallback = Some(label_for(
-                                        &this.model.browsers,
-                                        &imported.default_browser,
-                                        &imported.default_profile,
-                                    ));
+                            if let Some(result) = result {
+                                if let Some(imported) = result.current {
+                                    this.model.rules = imported.rules;
+                                    this.model.fallback = (!imported.default_browser.is_empty())
+                                        .then(|| {
+                                            label_for(
+                                                &this.model.browsers,
+                                                &imported.default_browser,
+                                                &imported.default_profile,
+                                            )
+                                        });
                                 }
-                                this.model.rules_import_status = Some(status);
+                                this.model.rules_import_status = Some(result.summary);
                             }
                             cx.notify();
                         });
@@ -2429,7 +2533,10 @@ fn everything_else_body(
     cx: &mut Context<'_, FirstRun>,
 ) -> Div {
     let body = div().flex().flex_col().gap(px(8.0));
-    if model.browsers.is_empty() {
+    if model.browsers_loading {
+        return body.child(paragraph(model.everything_else_detail()));
+    }
+    if model.browsers.is_empty() || model.browser_error.is_some() {
         return body.child(paragraph(model.everything_else_detail())).when(
             state != StepState::Todo,
             |body| {
@@ -4048,5 +4155,190 @@ mod tests {
         draw(cx);
         let later = cx.debug_bounds("first-run-later").unwrap();
         assert!(later.bottom() <= body.bottom(), "{later:?} in {body:?}");
+    }
+    fn gated_shared_scan(
+        cx: &mut TestAppContext,
+        cached: Vec<crate::browser_scan::DetectedApp>,
+    ) -> async_channel::Sender<Result<Vec<crate::browser_scan::DetectedApp>, String>> {
+        let (release, results) = async_channel::bounded(4);
+        cx.update(|cx| {
+            crate::browser_scan::install_fixture(cached, cx);
+            crate::browser_scan::set_test_producer(
+                cx,
+                std::sync::Arc::new(move || {
+                    let results = results.clone();
+                    Box::pin(async move { results.recv().await.unwrap() })
+                }),
+            );
+            crate::onboarding::install(cx);
+        });
+        release
+    }
+
+    fn scan_app(blocked: bool) -> crate::browser_scan::DetectedApp {
+        crate::browser_scan::DetectedApp {
+            name: "Google Chrome".into(),
+            bundle_id: Some("com.google.Chrome".into()),
+            location: "/fixture/chrome".into(),
+            profiles: if blocked { vec![] } else { vec!["Work".into()] },
+            directories: if blocked {
+                vec![]
+            } else {
+                vec!["Profile 1".into()]
+            },
+            profiles_blocked: blocked,
+        }
+    }
+
+    fn use_shared_scan(view: &Entity<FirstRun>, cx: &mut VisualTestContext) {
+        view.update(cx, |this, _| {
+            let hooks = crate::onboarding::hooks();
+            this.hooks.on_rescan = hooks.on_rescan;
+            this.hooks.on_reread = hooks.on_reread;
+        });
+    }
+
+    #[gpui_kit::test]
+    fn pending_empty_scan_is_loading_and_failure_retries_without_stale_fallback_write(
+        cx: &mut TestAppContext,
+    ) {
+        let release = gated_shared_scan(cx, vec![]);
+        let mut model = plain();
+        model.browsers.clear();
+        model.fallback = None;
+        let (view, calls, cx) = open_with(cx, model);
+        use_shared_scan(&view, cx);
+        view.update(cx, |this, cx| {
+            this.look_again(cx);
+            this.preselect(cx);
+        });
+        assert!(view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert!(view.read_with(cx, |this, _| {
+            this.model
+                .everything_else_detail()
+                .starts_with("Looking for browsers")
+        }));
+        assert!(calls.fallbacks.borrow().is_empty());
+        release
+            .try_send(Err("contrived scan failure".into()))
+            .unwrap();
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.browser_error.clone()),
+            Some("contrived scan failure".into())
+        );
+        assert!(calls.fallbacks.borrow().is_empty());
+        assert!(calls.imports.borrow().is_empty());
+        view.update(cx, |this, cx| this.look_again(cx));
+        assert!(view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert!(calls.fallbacks.borrow().is_empty());
+        release.try_send(Ok(vec![scan_app(false)])).unwrap();
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert!(view.read_with(cx, |this, _| this.model.browser_error.is_none()));
+        assert_eq!(
+            calls.fallbacks.borrow().len(),
+            1,
+            "only a fresh successful explicit rescan can preselect"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn blocked_rescan_preserves_choice_and_suppresses_superseded_scan(cx: &mut TestAppContext) {
+        let release = gated_shared_scan(cx, vec![scan_app(true)]);
+        let model = blocked();
+        let chosen = model.fallback.clone();
+        let config = model.finicky.clone();
+        let (view, calls, cx) = open_with(cx, model);
+        use_shared_scan(&view, cx);
+        view.update(cx, |this, cx| {
+            this.recheck_access(true, cx);
+            this.preselect(cx);
+        });
+        assert!(view.read_with(cx, |this, _| this.model.browsers_loading));
+        // A newer explicit scan supersedes the one already running.
+        view.update(cx, |this, cx| this.look_again(cx));
+        release.try_send(Ok(vec![scan_app(false)])).unwrap();
+        cx.run_until_parked();
+        assert!(view.read_with(cx, |this, _| this.model.browsers_loading));
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.fallback.clone()),
+            chosen
+        );
+        assert!(calls.fallbacks.borrow().is_empty());
+        release
+            .try_send(Err("contrived latest failure".into()))
+            .unwrap();
+        cx.run_until_parked();
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.fallback.clone()),
+            chosen
+        );
+        assert_eq!(
+            view.read_with(cx, |this, _| this.model.finicky.clone()),
+            config
+        );
+        assert!(view.read_with(cx, |this, _| this.model.browser_error.is_some()));
+        assert!(calls.fallbacks.borrow().is_empty());
+        assert!(calls.precedences.borrow().is_empty());
+        assert!(calls.imports.borrow().is_empty());
+        assert!(calls.finishes.borrow().is_empty());
+    }
+
+    #[gpui_kit::test]
+    fn closing_first_run_during_scan_never_preselects_or_reopens(cx: &mut TestAppContext) {
+        let release = gated_shared_scan(cx, vec![]);
+        let mut model = plain();
+        model.browsers.clear();
+        model.fallback = None;
+        let (view, calls, cx) = open_with(cx, model);
+        use_shared_scan(&view, cx);
+        view.update(cx, |this, cx| this.look_again(cx));
+        cx.update(|window, _| window.remove_window());
+        release.try_send(Ok(vec![scan_app(false)])).unwrap();
+        cx.run_until_parked();
+        assert!(calls.fallbacks.borrow().is_empty());
+        assert!(calls.precedences.borrow().is_empty());
+        assert!(calls.imports.borrow().is_empty());
+        assert!(
+            cx.windows()
+                .iter()
+                .all(|w| w.downcast::<FirstRun>().is_none())
+        );
+    }
+    #[gpui_kit::test]
+    fn review_regression_explicit_access_recheck_survives_async_scan(cx: &mut TestAppContext) {
+        let release = gated_shared_scan(cx, vec![scan_app(true)]);
+        let mut model = plain();
+        model.browsers = vec![BrowserChoice {
+            label: BrowserLabel::new("Ch", "Google Chrome", None),
+            value: "com.google.Chrome".into(),
+            profiles: vec![],
+            profiles_blocked: true,
+        }];
+        model.access = Some(ProfileAccess {
+            browsers: vec![model.browsers[0].label.clone()],
+            ..Default::default()
+        });
+        let (view, calls, cx) = open_with(cx, model);
+        use_shared_scan(&view, cx);
+        view.update(cx, |view, cx| {
+            view.recheck_access(true, cx);
+            view.recheck_access(false, cx);
+        });
+        assert!(view.read_with(cx, |v, _| v.model.browsers_loading));
+        // The activation reread coalesces one follow-up; the shared scanner
+        // discards the first snapshot and completes after the second.
+        release.try_send(Ok(vec![scan_app(true)])).unwrap();
+        release.try_send(Ok(vec![scan_app(true)])).unwrap();
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |v, _| v.model.browsers_loading));
+        assert!(view.read_with(cx, |v, _| v.model.access.as_ref().unwrap().still_blocked));
+        assert!(calls.fallbacks.borrow().is_empty());
+        view.update(cx, |view, cx| view.recheck_access(true, cx));
+        release.try_send(Ok(vec![scan_app(false)])).unwrap();
+        cx.run_until_parked();
+        assert!(!view.read_with(cx, |v, _| v.model.access.as_ref().unwrap().still_blocked));
     }
 }

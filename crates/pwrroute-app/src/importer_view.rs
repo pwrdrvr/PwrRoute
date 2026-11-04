@@ -225,6 +225,17 @@ impl ImportSession {
         self.0.borrow_mut().take();
     }
 
+    /// Check a delayed result against the saved rules/Undo receipt and source
+    /// revision without retrying persistence or applying another source choice.
+    pub(crate) fn validate_completed(&self, cx: &App) -> Result<(), String> {
+        self.0
+            .borrow()
+            .as_ref()
+            .ok_or("The import is no longer pending. Review it again.")?
+            .1
+            .validate(cx)
+    }
+
     /// Only an unchanged committed stage can complete a cached first-run
     /// answer. Retry persistence without replacing an active CLI override.
     pub(crate) fn revalidate_completed(&self, cx: &mut App) -> Result<(), String> {
@@ -279,7 +290,7 @@ fn recent_links(cx: &App) -> Vec<String> {
 
 /// Opens the importer on the config at `path`: on Review, or (`first_run`)
 /// on Choose source with every proven rule checked, as
-/// [`open_from_first_run`] does. A second call replaces what the open
+/// [`open_from_first_run_session`] does. A second call replaces what the open
 /// importer shows.
 pub fn open(path: PathBuf, first_run: bool, cx: &mut App) {
     open_with(path, first_run, crate::router::config_in_charge(), cx);
@@ -296,10 +307,6 @@ pub(crate) fn open_with(path: PathBuf, first_run: bool, in_charge: Option<PathBu
 /// `rules` (through the main window's store when it is open; the main
 /// window is never opened for it), and `on_done` hears how the importer was
 /// left.
-pub fn open_from_first_run(path: PathBuf, rules: Option<PathBuf>, on_done: OnDone, cx: &mut App) {
-    open_from_first_run_session(path, rules, on_done, ImportSession::default(), cx);
-}
-
 pub(crate) fn open_from_first_run_session(
     path: PathBuf,
     rules: Option<PathBuf>,
@@ -346,22 +353,56 @@ fn open_inner(
             (RulesStore::load(rules).written(), std::env::home_dir())
         });
     let recent = recent_links(cx);
-    let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
-    let mut model = if path.extension().is_some_and(|ext| ext == "json") {
-        ImportModel::read_rules(&path, home.as_deref(), in_charge.as_deref(), existing)
-    } else {
-        ImportModel::read(
-            &path,
-            home.as_deref(),
-            in_charge.as_deref(),
-            &refs,
-            existing,
-        )
+    let loading = ImportModel::failed(
+        &path,
+        display_path(&path, home.as_deref()),
+        "Reading config…".into(),
+    );
+    show(loading, from_first_run, cx);
+    let Some(window) = importer_window(cx) else {
+        return;
     };
-    if first_run {
-        model.start_at_source();
-    }
-    show(model, from_first_run, cx);
+    let request = Rc::new(());
+    let _ = window.update(cx, |this, _, cx| {
+        this.loading = true;
+        this.request = request.clone();
+        cx.notify();
+    });
+    let result =
+        crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Import, move || {
+            let mut stamps = crate::engine_worker::primary(Some(&path));
+            let refs: Vec<&str> = recent.iter().map(String::as_str).collect();
+            let mut model = if path.extension().is_some_and(|ext| ext == "json") {
+                ImportModel::read_rules(&path, home.as_deref(), in_charge.as_deref(), existing)
+            } else {
+                let (model, dependencies) = ImportModel::read_with_stamps(
+                    &path,
+                    home.as_deref(),
+                    in_charge.as_deref(),
+                    &refs,
+                    existing,
+                );
+                stamps = dependencies;
+                model
+            };
+            if first_run {
+                model.start_at_source();
+            }
+            (model, stamps)
+        });
+    let task = cx.spawn(async move |cx| {
+        if let Ok((mut model, stamps)) = crate::engine_worker::receive(result).await {
+            if !crate::engine_worker::unchanged(&stamps) { model.problem = Some("Config changed while reviewing. Choose the file again to review its current contents.".into()); }
+            let _ = window.update(cx, |this, _, cx| {
+                if Rc::ptr_eq(&this.request, &request) {
+                    this.model = model;
+                    this.loading = false;
+                    cx.notify();
+                }
+            });
+        }
+    });
+    crate::engine_worker::hold(cx, crate::engine_worker::Lane::Import, task);
 }
 
 /// Shows `model` in the importer, opening it when none is open. An open
@@ -382,6 +423,8 @@ fn show_attempt(
     }
     if let Some(window) = importer_window(cx) {
         let _ = window.update(cx, |this, window, cx| {
+            this.request = Rc::new(());
+            this.loading = false;
             this.model = model;
             let earlier_outcome = this
                 .saved
@@ -447,6 +490,8 @@ fn show_attempt(
 /// The importer's window.
 pub struct Importer {
     pub model: ImportModel,
+    loading: bool,
+    request: Rc<()>,
     pub focus: FocusHandle,
     menu_bar: Entity<MenuBar>,
     /// First run opened it and waits to hear how it is left. Taken by
@@ -458,6 +503,7 @@ pub struct Importer {
 impl Importer {
     pub fn new(model: ImportModel, cx: &mut Context<'_, Self>) -> Self {
         cx.on_release(|this: &mut Self, cx| {
+            crate::engine_worker::cancel_service(cx, crate::engine_worker::Lane::Import);
             if let Some(from) = this.from_first_run.take() {
                 let outcome = this
                     .saved
@@ -469,6 +515,8 @@ impl Importer {
         .detach();
         Self {
             model,
+            loading: false,
+            request: Rc::new(()),
             focus: cx.focus_handle(),
             menu_bar: MenuBar::listed("Import Finicky Config", cx),
             from_first_run: None,
@@ -493,6 +541,9 @@ impl Importer {
     }
 
     fn next(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.loading {
+            return;
+        }
         match self.model.next_step() {
             Some(step) => {
                 self.model.step = step;
@@ -913,23 +964,7 @@ pub fn found_config(home: Option<&Path>, cx: &App) -> Option<FoundConfig> {
     {
         return None;
     }
-    let holds = pwrroute_engine::Engine::load(
-        &file,
-        Rc::new(pwrroute_engine::DefaultHost),
-        pwrroute_engine::Limits::default(),
-    )
-    .ok()
-    .and_then(|engine| engine.describe().ok().flatten())
-    .map_or_else(
-        || "It did not load".to_owned(),
-        |config| {
-            format!(
-                "{}, {} and a default browser",
-                plural(config.rewrites.len(), "rewrite"),
-                plural(config.handlers.len(), "handler")
-            )
-        },
-    );
+    let holds = "Review this config to see its rules and default browser".to_owned();
     Some(FoundConfig {
         shown: display_path(&file, home),
         file,
@@ -2425,22 +2460,36 @@ fn footer(model: &ImportModel, saved: Option<&SavedImport>, cx: &mut Context<'_,
 impl Render for Importer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let model = self.model.clone();
-        let body = match (&model.problem, model.step) {
-            (Some(problem_text), _) => problem(&model, problem_text, cx).into_any_element(),
-            (None, _) if model.rules_file.is_some() => rules_review(&model).into_any_element(),
-            (None, Step::Review) => div()
+        let body = if self.loading {
+            div()
                 .flex_1()
-                .min_h_0()
-                .min_w_0()
-                .flex()
-                .child(list(&model, cx))
-                .child(detail(&model, cx))
-                .into_any_element(),
-            (None, Step::Place) => place(&model, cx).into_any_element(),
-            (None, Step::Source) => {
-                choose_source(&model, self.saved.is_some(), cx).into_any_element()
+                .p(px(24.0))
+                .child(text(
+                    "Reading and reviewing config…",
+                    13.0,
+                    500.0,
+                    theme::text_muted(),
+                ))
+                .into_any_element()
+        } else {
+            match (&model.problem, model.step) {
+                (Some(problem_text), _) => problem(&model, problem_text, cx).into_any_element(),
+                (None, _) if model.rules_file.is_some() => rules_review(&model).into_any_element(),
+                (None, Step::Review) => div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .flex()
+                    .child(list(&model, cx))
+                    .child(detail(&model, cx))
+                    .into_any_element(),
+                (None, Step::Place) => place(&model, cx).into_any_element(),
+                (None, Step::Source) => {
+                    choose_source(&model, self.saved.is_some(), cx).into_any_element()
+                }
             }
         };
+
         div()
             .id(ROOT_ID)
             .role(gpui_kit::Role::Dialog)
@@ -2472,5 +2521,220 @@ impl Render for Importer {
                     .child(body),
             )
             .child(footer(&model, self.saved.as_ref(), cx))
+    }
+}
+
+#[cfg(test)]
+mod worker_integration_tests {
+    use super::*;
+
+    fn delayed_copy_summary(cx: &mut gpui_kit::TestAppContext, change: u8) {
+        struct Gate(Option<std::sync::mpsc::Sender<()>>);
+        impl Drop for Gate {
+            fn drop(&mut self) {
+                if let Some(send) = self.0.take() {
+                    let _ = send.send(());
+                }
+            }
+        }
+        cx.update(|cx| crate::assets::load_fonts(cx));
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("PwrRoute");
+        let target = data.join("rules.json");
+        let source = dir.path().join("Finicky/rules.json");
+        let file: RulesFile = serde_json::from_str(r#"{
+            "defaultBrowser":"org.mozilla.firefox",
+            "rules":[{"match":"example.com/*", "browser":"com.apple.Safari", "examples":["https://example.com/a"]}],
+            "tests":[{"url":"https://example.com/a", "expect":{"browser":"com.apple.Safari"}}]
+        }"#).unwrap();
+        file.save(&source).unwrap();
+        let hooks = crate::onboarding::hooks_with(
+            Some(data.clone()),
+            Some(target.clone()),
+            None,
+            Rc::new(|_, _| Ok(())),
+            Rc::new(|_, _| panic!("copy opens no main window")),
+        );
+        let mut model = crate::first_run::FirstRunModel::fixture();
+        model.finicky = None;
+        model.finicky_rules = Some((source, "Finicky/rules.json".into()));
+        let first = cx.update(|cx| crate::first_run::open(model, hooks.clone(), cx).unwrap());
+        {
+            let mut visual = gpui_kit::VisualTestContext::from_window(first.into(), cx);
+            visual.update(|window, cx| {
+                window.draw(cx).clear(cx);
+            });
+            let bounds = visual.debug_bounds("first-run-copy-finicky-rules").unwrap();
+            visual.simulate_click(bounds.center(), gpui_kit::Modifiers::none());
+        }
+        cx.update(crate::engine_worker::settle);
+        cx.run_until_parked();
+        let review = cx.update(|cx| importer_window(cx).unwrap());
+        let (entered, started) = std::sync::mpsc::channel();
+        let (send, receive) = std::sync::mpsc::channel();
+        let gate = Gate(Some(send));
+        let _blocked = cx.update(|cx| {
+            crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || {
+                entered.send(()).unwrap();
+                receive.recv().unwrap();
+            })
+        });
+        started.recv().unwrap();
+        cx.update(|cx| {
+            review
+                .update(cx, |this, window, cx| this.import(window, cx))
+                .unwrap();
+        });
+        // The copy has committed, but its saved-test summary is still queued.
+        assert_eq!(RulesFile::load(&target).unwrap(), file);
+        cx.update(|cx| {
+            assert!(first.read(cx).unwrap().model.copying_rules);
+            if change == 0 {
+                let browser = first.read(cx).unwrap().model.browsers[0].clone();
+                (hooks.on_fallback)(
+                    crate::first_run::Fallback {
+                        browser: browser.clone(),
+                        profile: Some("Work".into()),
+                    },
+                    cx,
+                )
+                .unwrap();
+                first
+                    .update(cx, |this, _, _| {
+                        let mut label = browser.label;
+                        label.profile = Some("Work".into());
+                        this.model.fallback = Some(label);
+                    })
+                    .unwrap();
+            } else if change == 1 {
+                let mut current = RulesFile::load(&target).unwrap();
+                current.rules.clear();
+                current.save(&target).unwrap();
+                first
+                    .update(cx, |this, _, _| {
+                        this.model.rules = 0;
+                    })
+                    .unwrap();
+            } else {
+                std::fs::write(&target, "a newer unfinished edit").unwrap();
+            }
+        });
+        let current = std::fs::read(&target).unwrap();
+        let shown_before = cx.update(|cx| {
+            let model = &first.read(cx).unwrap().model;
+            (model.rules, model.fallback.clone())
+        });
+        let state_before = std::fs::read(data.join("state.json")).ok();
+        drop(gate);
+        cx.update(crate::engine_worker::settle);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let model = &first.read(cx).unwrap().model;
+            assert!(!model.copying_rules);
+            let expected_rules = if change == 0 { 1 } else { shown_before.0 };
+            assert_eq!(
+                model.rules, expected_rules,
+                "late summary replaced the current rule count"
+            );
+            if change == 0 {
+                let fallback = model.fallback.as_ref().unwrap();
+                assert_eq!(
+                    fallback.name, "Google Chrome",
+                    "late summary replaced the new fallback"
+                );
+                assert_eq!(fallback.profile.as_deref(), Some("Work"));
+            } else if change == 2 {
+                assert_eq!(
+                    model.fallback, shown_before.1,
+                    "unreadable facts replaced the current choice"
+                );
+            }
+            let status = model.rules_import_status.as_deref().unwrap();
+            assert!(status.starts_with("Copied 2 entries."), "{status}");
+            assert!(status.contains("changed"), "{status}");
+            assert!(!status.contains("2 of 2 passed"), "{status}");
+        });
+        assert_eq!(std::fs::read(&target).unwrap(), current);
+        assert_eq!(std::fs::read(data.join("state.json")).ok(), state_before);
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_import_summary_keeps_newer_fallback(cx: &mut gpui_kit::TestAppContext) {
+        delayed_copy_summary(cx, 0);
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_import_summary_keeps_newer_rules(cx: &mut gpui_kit::TestAppContext) {
+        delayed_copy_summary(cx, 1);
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_import_summary_does_not_invent_unreadable_facts(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        delayed_copy_summary(cx, 2);
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_queued_review_cannot_replace_saved_retry_stage(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        struct Gate(Option<std::sync::mpsc::Sender<()>>);
+        impl Drop for Gate {
+            fn drop(&mut self) {
+                if let Some(send) = self.0.take() {
+                    let _ = send.send(());
+                }
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("old.js");
+        let staged = dir.path().join("saved.js");
+        let rules_path = dir.path().join("rules.json");
+        std::fs::write(&config, "export default { defaultBrowser: 'Safari' }").unwrap();
+        let file = RulesFile::default();
+        file.save(&rules_path).unwrap();
+        let receipt = SavedRules::new(Some(&rules_path), file);
+        let (entered, started) = std::sync::mpsc::channel();
+        let (send, receive) = std::sync::mpsc::channel();
+        let gate = Gate(Some(send));
+        let _blocked = cx.update(|cx| {
+            crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || {
+                entered.send(()).unwrap();
+                receive.recv().unwrap();
+            })
+        });
+        started.recv().unwrap();
+        cx.update(|cx| {
+            open_inner(config, false, None, None, cx);
+            assert!(importer_window(cx).unwrap().read(cx).unwrap().loading);
+            let model =
+                ImportModel::failed(&staged, "saved retry".into(), "pending source save".into());
+            show_attempt(
+                model,
+                None,
+                Some(SavedImport {
+                    count: 3,
+                    rules: receipt.clone(),
+                    source: None,
+                    source_revision: 0,
+                    keeps_config: true,
+                    source_error: Some("source pending".into()),
+                }),
+                cx,
+            );
+        });
+        drop(gate);
+        cx.update(crate::engine_worker::settle);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let view = importer_window(cx).unwrap().read(cx).unwrap();
+            assert!(!view.loading);
+            assert_eq!(view.model.path, staged);
+            assert_eq!(view.saved.as_ref().unwrap().count, 3);
+            assert!(view.saved.as_ref().unwrap().validate(cx).is_ok());
+            receipt.invalidate();
+            assert!(view.saved.as_ref().unwrap().validate(cx).is_err());
+        });
     }
 }

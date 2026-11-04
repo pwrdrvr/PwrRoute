@@ -80,6 +80,7 @@ pub struct Probe {
     config_name: Option<String>,
     rules: RulesFile,
     engine: Option<Engine>,
+    loaded: crate::engine_worker::Stamps,
 }
 
 impl Probe {
@@ -100,6 +101,7 @@ impl Probe {
             config,
             rules,
             engine: None,
+            loaded: Vec::new(),
         }
     }
 
@@ -111,7 +113,31 @@ impl Probe {
             config_name: self.config_name.clone(),
             rules,
             engine: None,
+            loaded: Vec::new(),
         }
+    }
+
+    /// Plain data only crosses the worker boundary.
+    pub fn input(&self) -> (Option<PathBuf>, Option<String>, RulesFile) {
+        (
+            self.config.clone(),
+            self.config_name.clone(),
+            self.rules.clone(),
+        )
+    }
+
+    pub fn from_input(input: (Option<PathBuf>, Option<String>, RulesFile)) -> Self {
+        Self {
+            config: input.0,
+            config_name: input.1,
+            rules: input.2,
+            engine: None,
+            loaded: Vec::new(),
+        }
+    }
+
+    pub fn stamps(&self) -> crate::engine_worker::Stamps {
+        self.loaded.clone()
     }
 
     /// The rules changed: the next probe loads them.
@@ -125,7 +151,11 @@ impl Probe {
     /// The engine over the rules as they stand, built on first use.
     fn engine(&mut self) -> Result<&Engine, String> {
         if self.engine.is_none() {
-            self.engine = Some(load(self.config.as_deref(), &self.rules)?);
+            self.loaded = crate::engine_worker::primary(self.config.as_deref());
+            let engine = load(self.config.as_deref(), &self.rules)?;
+            self.loaded =
+                crate::engine_worker::dependencies(std::mem::take(&mut self.loaded), &engine);
+            self.engine = Some(engine);
         }
         self.engine
             .as_ref()
@@ -186,6 +216,7 @@ impl Probe {
     /// The handler of `rules.json` that takes `url`, as from `opener`, by
     /// its position in the file; `None` when the default, a config handler
     /// or nothing takes it.
+    #[cfg(test)]
     pub fn winning_handler(&mut self, url: &str, opener: Option<&Opener>) -> Option<usize> {
         let trace = self.trace(url, opener).ok()?;
         let winner = trace.winner()?;
@@ -219,6 +250,7 @@ pub struct TestRuns {
     rules: RulesFile,
     report: Option<Result<TestReport, String>>,
     ran_at: Option<SystemTime>,
+    request: Rc<()>,
 }
 
 impl TestRuns {
@@ -228,6 +260,7 @@ impl TestRuns {
             rules,
             report: None,
             ran_at: None,
+            request: Rc::new(()),
         }
     }
 
@@ -236,10 +269,12 @@ impl TestRuns {
         if self.rules != rules {
             self.rules = rules;
             self.report = None;
+            self.request = Rc::new(());
         }
     }
 
     /// Runs every example and test now and keeps the report.
+    #[cfg(test)]
     pub fn run(&mut self) -> &Result<TestReport, String> {
         let report = load(self.config.as_deref(), &self.rules).and_then(|engine| {
             engine
@@ -249,6 +284,29 @@ impl TestRuns {
         self.report = Some(report);
         self.ran_at = Some(SystemTime::now());
         self.report.as_ref().expect("just set")
+    }
+
+    pub fn begin(&mut self) -> (Rc<()>, Option<PathBuf>, RulesFile) {
+        self.request = Rc::new(());
+        self.report = None;
+        (
+            self.request.clone(),
+            self.config.clone(),
+            self.rules.clone(),
+        )
+    }
+
+    pub fn is_current(&self, request: &Rc<()>) -> bool {
+        Rc::ptr_eq(&self.request, request)
+    }
+
+    pub fn complete(&mut self, request: Rc<()>, report: Result<TestReport, String>) -> bool {
+        if !Rc::ptr_eq(&self.request, &request) {
+            return false;
+        }
+        self.report = Some(report);
+        self.ran_at = Some(SystemTime::now());
+        true
     }
 
     /// The last report, when the rules have not changed since it ran.
@@ -927,5 +985,188 @@ mod tests {
         assert!(!step_before(&step(Source::Config, 0), 3, true));
         assert!(step_before(&step(Source::Rules, 1), 2, true));
         assert!(!step_before(&step(Source::Rules, 2), 2, false));
+    }
+}
+
+/// One saved assertion per scheduler turn, with the synced rules and no
+/// machine overrides (the same semantics as Engine::test_rules).
+pub fn test_steps(
+    config: Option<PathBuf>,
+    rules: RulesFile,
+) -> impl FnMut() -> Option<(Result<TestReport, String>, crate::engine_worker::Stamps)> {
+    let before = crate::engine_worker::primary(config.as_deref());
+    let loaded = crate::router::engine_as_routed(
+        &pwrroute_engine::Sources {
+            config,
+            rules: rules.clone(),
+            ..Default::default()
+        },
+        Rc::new(NativeHost::new()),
+        Limits::default(),
+    )
+    .map_err(|e| format!("The rules did not load: {e:#}"));
+    let (mut engine, mut error) = match loaded {
+        Ok(engine) => (Some(engine), None),
+        Err(error) => (None, Some(Err(error))),
+    };
+    let stamps = engine.as_ref().map_or_else(
+        || before.clone(),
+        |engine| crate::engine_worker::dependencies(before.clone(), engine),
+    );
+    let rules = engine
+        .as_ref()
+        .map(|engine| engine.rules().clone())
+        .unwrap_or(rules);
+    let mut sources = Vec::new();
+    for (i, rule) in rules.rules.iter().enumerate() {
+        for j in 0..rule.examples.len() {
+            sources.push(TestSource::RuleExample {
+                rule: i,
+                example: j,
+            });
+        }
+    }
+    for (i, rule) in rules.rewrites.iter().enumerate() {
+        for j in 0..rule.examples.len() {
+            sources.push(TestSource::RewriteExample {
+                rewrite: i,
+                example: j,
+            });
+        }
+    }
+    for i in 0..rules.tests.len() {
+        sources.push(TestSource::Test { test: i });
+    }
+    let mut sources = sources.into_iter();
+    let mut report = TestReport::default();
+    let mut step = move || {
+        if let Some(error) = error.take() {
+            return Some(error);
+        }
+        let Some(source) = sources.next() else {
+            return Some(Ok(std::mem::take(&mut report)));
+        };
+        let mut single = rules.clone();
+        for rule in &mut single.rules {
+            rule.examples.clear();
+        }
+        for rule in &mut single.rewrites {
+            rule.examples.clear();
+        }
+        single.tests.clear();
+        match source {
+            TestSource::RuleExample { rule, example } => single.rules[rule]
+                .examples
+                .push(rules.rules[rule].examples[example].clone()),
+            TestSource::RewriteExample { rewrite, example } => single.rewrites[rewrite]
+                .examples
+                .push(rules.rewrites[rewrite].examples[example].clone()),
+            TestSource::Test { test } => single.tests.push(rules.tests[test].clone()),
+        }
+        match single.run_tests(engine.as_ref().expect("loaded")) {
+            Ok(part) => {
+                report.total += part.total;
+                report.passed += part.passed;
+                report
+                    .failures
+                    .extend(part.failures.into_iter().map(|mut f| {
+                        f.source = source;
+                        f
+                    }));
+                report.console.extend(part.console);
+                let over = report
+                    .console
+                    .len()
+                    .saturating_sub(pwrroute_engine::ConsoleLog::CAPACITY);
+                report.console.drain(..over);
+                None
+            }
+            Err(e) => {
+                engine.take();
+                Some(Err(format!("The tests did not run: {e:#}")))
+            }
+        }
+    };
+    move || step().map(|report| (report, stamps.clone()))
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use super::*;
+    #[test]
+    fn saved_test_steps_match_engine_completion_and_failure() {
+        let mut rules = crate::fixtures::rules_file();
+        rules.rules[0].examples = vec![
+            "https://meet.google.com/contrived".into(),
+            "https://unmatched.example.com/".into(),
+        ];
+        rules.tests.push(pwrroute_engine::RouteTest {
+            original_url: None,
+            url: "https://example.com/".into(),
+            opener: None,
+            expect: pwrroute_engine::Expectation {
+                browser: "Firefox".into(),
+                profile: None,
+                url: None,
+            },
+        });
+        let expected = load(None, &rules).unwrap().test_rules(None).unwrap();
+        assert!(expected.total > 0);
+        let mut steps = test_steps(None, rules);
+        let report = loop {
+            if let Some((report, _)) = steps() {
+                break report.unwrap();
+            }
+        };
+        assert_eq!(report, expected);
+        let mut failed = test_steps(
+            Some(PathBuf::from("/missing/contrived-config.js")),
+            RulesFile::default(),
+        );
+        assert!(failed().unwrap().0.is_err());
+    }
+
+    #[test]
+    fn review_regression_saved_examples_use_resolved_destinations_and_sets() {
+        let rules: RulesFile = serde_json::from_str(r#"{
+            "defaultBrowser":"Safari",
+            "destinations":[{"name":"Work","browser":"Firefox","profile":"Work"}],
+            "sets":[{"name":"Off","enabled":false}],
+            "rules":[
+                {"match":"destination.example/*","destination":"Work","examples":["https://destination.example/a"]},
+                {"match":"disabled.example/*","browser":"Firefox","set":"Off","examples":["https://disabled.example/a"]}
+            ]
+        }"#).unwrap();
+        let expected = load(None, &rules).unwrap().test_rules(None).unwrap();
+        assert_eq!(expected.total, 1);
+        assert_eq!(expected.passed, 1);
+        let mut steps = test_steps(None, rules);
+        let actual = loop {
+            if let Some((report, _)) = steps() {
+                break report.unwrap();
+            }
+        };
+        assert_eq!(actual, expected);
+    }
+    #[test]
+    fn saved_test_result_tokens_reject_edits_new_requests_and_new_sources() {
+        let mut runs = TestRuns::new(None, RulesFile::default());
+        let (old, _, _) = runs.begin();
+        let changed = RulesFile {
+            default_browser: "Firefox".into(),
+            ..Default::default()
+        };
+        runs.set_rules(changed);
+        assert!(!runs.complete(old, Ok(TestReport::default())));
+        let (old, _, _) = runs.begin();
+        let (latest, _, _) = runs.begin();
+        assert!(!runs.complete(old, Ok(TestReport::default())));
+        assert!(runs.complete(latest, Err("contrived failure".into())));
+        assert!(matches!(runs.report(), Some(Err(_))));
+        assert!(runs.ran_at().is_some());
+        let (previous_source, _, _) = runs.begin();
+        let mut replacement = TestRuns::new(Some(PathBuf::from("other.js")), RulesFile::default());
+        let _ = replacement.begin();
+        assert!(!replacement.complete(previous_source, Ok(TestReport::default())));
     }
 }

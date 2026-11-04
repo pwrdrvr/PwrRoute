@@ -339,6 +339,7 @@ impl ImportModel {
     /// probing suggestions on `recent` links too. `in_charge` is the config
     /// the router reads now, if any; `existing` is `rules.json` as it
     /// stands.
+    #[cfg(test)]
     pub fn read(
         path: &Path,
         home: Option<&Path>,
@@ -346,9 +347,24 @@ impl ImportModel {
         recent: &[&str],
         existing: RulesFile,
     ) -> Self {
+        Self::read_with_stamps(path, home, in_charge, recent, existing).0
+    }
+
+    pub fn read_with_stamps(
+        path: &Path,
+        home: Option<&Path>,
+        in_charge: Option<&Path>,
+        recent: &[&str],
+        existing: RulesFile,
+    ) -> (Self, crate::engine_worker::Stamps) {
         let shown = display_path(path, home);
         let charge = Charge::of(path, in_charge, home);
+        let before = crate::engine_worker::primary(Some(path));
         let engine = Engine::load(path, Rc::new(NativeHost::new()), Limits::default());
+        let stamps = engine.as_ref().map_or_else(
+            |_| before.clone(),
+            |engine| crate::engine_worker::dependencies(before.clone(), engine),
+        );
         let reviewed = engine.and_then(|engine| {
             let description = engine.describe()?;
             let review = engine.review_import(recent)?;
@@ -370,7 +386,7 @@ impl ImportModel {
             Err(error) => Self::failed(path, shown, format!("{error:#}")),
         };
         model.charge = charge;
-        model
+        (model, stamps)
     }
 
     /// The model for an engine's description and review of the config.

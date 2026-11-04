@@ -8,10 +8,10 @@
 
 use gpui_kit::App;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 use crate::{
     app::PwrRoute, doc_window::DocWindow, first_run::FirstRun, logs_window::LogsWindow,
-    settings::SettingsWindow,
+    onboarding::Preparing, settings::SettingsWindow,
 };
 
 /// Start following the windows. Call once, before any window opens; the app
@@ -23,6 +23,8 @@ pub fn install(cx: &mut App) {
         // A window is being built: show the Dock icon before it is on screen,
         // so the app menu is there when it activates.
         cx.observe_new::<PwrRoute>(|_, _, _| crate::macos::set_dock_icon(true))
+            .detach();
+        cx.observe_new::<Preparing>(|_, _, _| crate::macos::set_dock_icon(true))
             .detach();
         cx.observe_new::<FirstRun>(|_, _, _| crate::macos::set_dock_icon(true))
             .detach();
@@ -62,11 +64,12 @@ pub fn after_link(yield_to_browser: bool) {
 }
 
 /// Whether a window that wants the Dock icon is open.
-#[cfg(target_os = "macos")]
-fn has_dock_window(cx: &App) -> bool {
+#[cfg(any(target_os = "macos", test))]
+pub(crate) fn has_dock_window(cx: &App) -> bool {
     cx.windows().into_iter().any(|window| {
         window.downcast::<PwrRoute>().is_some()
             || window.downcast::<FirstRun>().is_some()
+            || window.downcast::<Preparing>().is_some()
             || window.downcast::<SettingsWindow>().is_some()
             || window.downcast::<DocWindow>().is_some()
             || window.downcast::<LogsWindow>().is_some()

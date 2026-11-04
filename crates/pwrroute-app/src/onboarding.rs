@@ -31,9 +31,12 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
-use gpui_kit::{App, DisplayId, Subscription, WindowHandle};
+use gpui_kit::{
+    App, AppContext as _, Context, DisplayId, ParentElement as _, Render, Styled as _,
+    Subscription, Window, WindowHandle,
+};
 use pwrroute_engine::{
-    AppType, BrowserSpec, DefaultHost, Engine, Limits, Precedence, RulesFile, discovery,
+    AppType, BrowserSpec, Engine, Limits, NativeHost, Precedence, RulesFile, discovery,
 };
 use serde::{Deserialize, Serialize};
 
@@ -173,29 +176,40 @@ pub struct FinickyFound {
 }
 
 impl FinickyFound {
-    /// Reads the config at `path`: evaluating it, as the Rules screen does,
-    /// to count its rules and the ones that import, and to read its
-    /// default. A config that fails to load is still found, with the
-    /// reason.
-    pub fn read(path: PathBuf) -> Self {
-        let engine = match Engine::load(&path, Rc::new(DefaultHost), Limits::default()) {
+    #[cfg(test)]
+    fn read(path: PathBuf) -> Self {
+        Self::read_with_stamps(path).0
+    }
+
+    /// Evaluate and review on the engine owner, retaining every module the
+    /// review depends on until first run can actually open.
+    fn read_with_stamps(path: PathBuf) -> (Self, crate::engine_worker::Stamps) {
+        let before = crate::engine_worker::primary(Some(&path));
+        let engine = match Engine::load(&path, Rc::new(NativeHost::new()), Limits::default()) {
             Ok(engine) => engine,
             Err(error) => {
-                return Self {
-                    error: Some(format!("{error:#}")),
-                    path,
-                    ..Self::default()
-                };
+                return (
+                    Self {
+                        error: Some(format!("{error:#}")),
+                        path,
+                        ..Self::default()
+                    },
+                    before,
+                );
             }
         };
+        let stamps = crate::engine_worker::dependencies(before, &engine);
         let description = match engine.describe() {
             Ok(description) => description,
             Err(error) => {
-                return Self {
-                    error: Some(format!("{error:#}")),
-                    path,
-                    ..Self::default()
-                };
+                return (
+                    Self {
+                        error: Some(format!("{error:#}")),
+                        path,
+                        ..Self::default()
+                    },
+                    stamps,
+                );
             }
         };
         let (rewrites, handlers, default) = description.map_or((0, 0, None), |config| {
@@ -230,15 +244,18 @@ impl FinickyFound {
             ),
             None => (None, None),
         };
-        Self {
-            path,
-            rewrites,
-            handlers,
-            importable,
-            default_browser,
-            default_profile,
-            error: None,
-        }
+        (
+            Self {
+                path,
+                rewrites,
+                handlers,
+                importable,
+                default_browser,
+                default_profile,
+                error: None,
+            },
+            stamps,
+        )
     }
 }
 
@@ -265,9 +282,31 @@ pub struct Facts {
     /// list (macOS's Files & Folders): a browser whose list was kept from
     /// PwrRoute then gets first run's access step.
     pub access_pane: bool,
+    rules_path: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
 }
 
 impl Facts {
+    fn refresh_saved(&mut self) {
+        if let Some(rules) = self
+            .rules_path
+            .as_deref()
+            .and_then(|path| RulesFile::load(path).ok())
+        {
+            self.rules_default = rules.default_browser;
+            self.rules_profile = rules.default_profile;
+            self.rules = rules.rules.len();
+            self.precedence = rules.precedence;
+        }
+        if let Some(state) = self
+            .state_dir
+            .as_deref()
+            .and_then(|dir| State::load(dir).ok())
+        {
+            self.state = state;
+        }
+    }
+
     /// Reads the machine: the OS's answer on the default browser (already
     /// read by [`default_browser`]), the installed browsers (the shared
     /// scan), the config the router chose, `rules.json` and `state.json`.
@@ -282,7 +321,7 @@ impl Facts {
         Self {
             handler: default_browser::state(cx),
             browsers: choices(crate::browser_scan::apps(cx), &hidden(cx)),
-            finicky: crate::router::config_in_charge().map(FinickyFound::read),
+            finicky: None,
             finicky_rules: discovery::find_finicky_rules(&env),
             rules_default: rules.default_browser,
             rules_profile: rules.default_profile,
@@ -290,6 +329,8 @@ impl Facts {
             precedence: rules.precedence,
             state,
             access_pane: cfg!(target_os = "macos"),
+            rules_path: discovery::rules_path(&env),
+            state_dir: pwrroute_os::data_dir(),
         }
     }
 }
@@ -527,6 +568,8 @@ pub fn hooks_with(
     FirstRunHooks {
         on_import_rules: Rc::new(move |path, reply, cx| {
             let rules = copy_rules_path.clone();
+            let session = crate::importer_view::ImportSession::default();
+            let completed = session.clone();
             let on_done: crate::importer_view::OnDone = Rc::new(move |outcome, cx| {
                 let result = match outcome {
                     crate::importer_view::ImportOutcome::Cancelled => None,
@@ -540,36 +583,57 @@ pub fn hooks_with(
                             .as_deref()
                             .and_then(|path| RulesFile::load(path).ok())
                             .unwrap_or_default();
-                        let report = Engine::from_sources(
-                            &pwrroute_engine::Sources {
-                                config,
-                                rules: file,
-                                ..Default::default()
-                            },
-                            Rc::new(pwrroute_engine::NativeHost::new()),
-                            Limits::default(),
-                        )
-                        .and_then(|engine| engine.test_rules(None));
-                        let summary = match report {
-                            Ok(report) => format!(
-                                "Copied {count} entries. Saved examples and tests: {} of {} passed. See Rules for any failures.",
-                                report.passed, report.total
-                            ),
-                            Err(_) => format!(
-                                "Copied {count} entries. Saved examples and tests could not run; see Rules for details."
-                            ),
-                        };
-                        let summary = match source_error {
-                            Some(reason) => format!("{summary} {reason}"),
-                            None => summary,
-                        };
-                        Some((imported(count, keeps_config, rules.as_deref()), summary))
+
+                        let result = crate::engine_worker::service(cx).submit(
+                            crate::engine_worker::Lane::Onboarding,
+                            std::time::Duration::ZERO,
+                            move |_| crate::try_it::test_steps(config, file),
+                        );
+                        let reply = reply.clone();
+                        let completed = completed.clone();
+                        let rules = rules.clone();
+                        let task = cx.spawn(async move |cx| {
+                            if let Ok((report, _stamps)) = crate::engine_worker::receive(result).await {
+                                cx.update(|cx| {
+                                    let unchanged = completed.validate_completed(cx).is_ok()
+                                        && crate::engine_worker::unchanged(&_stamps);
+                                    let summary = if !unchanged {
+                                        format!("Copied {count} entries. Rules, source or config changed while tests ran; run saved examples and tests again in Rules.")
+                                    } else {
+                                        match report {
+                                            Ok(report) => format!("Copied {count} entries. Saved examples and tests: {} of {} passed. See Rules for any failures.", report.passed, report.total),
+                                            Err(_) => format!("Copied {count} entries. Saved examples and tests could not run; see Rules for details."),
+                                        }
+                                    };
+                                    let summary = match &source_error {
+                                        Some(reason) => format!("{summary} {reason}"),
+                                        None => summary,
+                                    };
+                                    // The copy count is historical; these facts describe the file
+                                    // now, including a later fallback choice, edit or Undo.
+                                    let current = rules.as_deref().and_then(|path| RulesFile::load(path).ok()).map(|file| Imported {
+                                        count, keeps_config, rules: file.rules.len(),
+                                        default_browser: file.default_browser,
+                                        default_profile: file.default_profile,
+                                    });
+                                    reply(Some(first_run::RulesImportResult { current, summary }), cx);
+                                });
+                            }
+                        });
+                        crate::engine_worker::hold(
+                            cx,
+                            crate::engine_worker::Lane::Onboarding,
+                            task,
+                        );
+                        return;
                     }
                 };
                 reply(result, cx);
             });
             let rules = copy_rules_path.clone();
-            cx.defer(move |cx| crate::importer_view::open_from_first_run(path, rules, on_done, cx));
+            cx.defer(move |cx| {
+                crate::importer_view::open_from_first_run_session(path, rules, on_done, session, cx)
+            });
         }),
         on_fallback: Rc::new(move |choice: first_run::Fallback, _| {
             edit_rules(fallback_rules.as_deref(), |rules| {
@@ -747,53 +811,6 @@ pub fn install(cx: &mut App) {
     crate::browser_scan::on_complete(cx, Rc::new(refresh_browsers));
 }
 
-fn refresh_browser_model(
-    model: &mut FirstRunModel,
-    browsers: Vec<BrowserChoice>,
-    access_pane: bool,
-) {
-    let before = model.still_blocked().len();
-    model.browsers = browsers;
-    let blocked: Vec<_> = model
-        .browsers
-        .iter()
-        .filter(|browser| browser.profiles_blocked)
-        .map(|browser| browser.label.clone())
-        .collect();
-    if model.access.is_none() && access_pane && !blocked.is_empty() {
-        model.access = Some(ProfileAccess {
-            browsers: blocked,
-            ..Default::default()
-        });
-    } else if let Some(access) = model.access.as_mut() {
-        for label in blocked {
-            if !access.browsers.iter().any(|known| known.name == label.name) {
-                access.browsers.push(label);
-            }
-        }
-        if before > model.still_blocked().len() {
-            model.access.as_mut().unwrap().still_blocked = false;
-        }
-    }
-}
-
-/// Refresh only discovered browsers; retain the person's setup choices.
-pub fn refresh_browsers(cx: &mut App) {
-    if crate::browser_scan::is_loading(cx) || crate::browser_scan::error(cx).is_some() {
-        return;
-    }
-    let browsers = choices(crate::browser_scan::apps(cx), &hidden(cx));
-    for window in cx.windows() {
-        if let Some(window) = window.downcast::<FirstRun>() {
-            let _ = window.update(cx, |view, _, cx| {
-                refresh_browser_model(&mut view.model, browsers.clone(), cfg!(target_os = "macos"));
-                view.preselect(cx);
-                cx.notify();
-            });
-        }
-    }
-}
-
 impl gpui_kit::Global for Open {}
 
 /// Opens first run over the machine's facts, with the Everything else
@@ -813,7 +830,235 @@ pub fn open(cx: &mut App) {
         cx.activate(true);
         return;
     }
+    if let Some(window) = cx.try_global::<Opening>().map(|opening| opening.window) {
+        let _ = window.update(cx, |_, window, cx| {
+            crate::menu_bar::bring_forward(window, cx)
+        });
+        return;
+    }
     let facts = Facts::probe(cx);
+    let config = crate::router::config_in_charge();
+    prepare(facts, config, cx);
+}
+
+fn prepare(facts: Facts, config: Option<PathBuf>, cx: &mut App) {
+    if config.is_none()
+        && !crate::browser_scan::is_loading(cx)
+        && crate::browser_scan::error(cx).is_none()
+    {
+        open_ready(facts, cx);
+        return;
+    }
+    let request = Rc::new(());
+    let display = crate::placement::display_for_new_window(cx);
+    let bounds = gpui_kit::Bounds::centered(
+        display,
+        gpui_kit::size(crate::theme::px(680.0), crate::theme::px(320.0)),
+        cx,
+    );
+    let token = request.clone();
+    let Ok(window) = cx.open_window(
+        gpui_kit::WindowOptions {
+            window_bounds: Some(gpui_kit::WindowBounds::Windowed(bounds)),
+            display_id: display,
+            titlebar: Some(gpui_kit::TitlebarOptions {
+                title: Some("Set up PwrRoute".into()),
+                ..Default::default()
+            }),
+            app_id: Some("pwrroute".into()),
+            ..Default::default()
+        },
+        |_, cx| {
+            cx.new(|cx| {
+                cx.on_release(move |_, cx| {
+                    if cx
+                        .try_global::<Opening>()
+                        .is_some_and(|opening| Rc::ptr_eq(&opening.request, &token))
+                    {
+                        cx.remove_global::<Opening>();
+                        crate::engine_worker::cancel_service(
+                            cx,
+                            crate::engine_worker::Lane::Config,
+                        );
+                    }
+                })
+                .detach();
+                Preparing { failure: None }
+            })
+        },
+    ) else {
+        return;
+    };
+    cx.set_global(Opening {
+        request: request.clone(),
+        window,
+        facts,
+        config: config.clone(),
+        config_ready: config.is_none(),
+        stamps: Vec::new(),
+    });
+    cx.activate(true);
+    if config.is_some() {
+        let result =
+            crate::engine_worker::service(cx).once(crate::engine_worker::Lane::Config, move || {
+                let (found, stamps) = FinickyFound::read_with_stamps(config.unwrap());
+                (Some(found), stamps)
+            });
+        let token = request.clone();
+        let task = cx.spawn(async move |cx| {
+            if let Ok((finicky, stamps)) = crate::engine_worker::receive(result).await {
+                cx.update(|cx| {
+                    if !cx
+                        .try_global::<Opening>()
+                        .is_some_and(|opening| Rc::ptr_eq(&opening.request, &token))
+                    {
+                        return;
+                    }
+                    if !crate::engine_worker::unchanged(&stamps) {
+                        restart_opening(cx);
+                        return;
+                    }
+                    let opening = cx.global_mut::<Opening>();
+                    opening.facts.finicky = finicky;
+                    opening.config_ready = true;
+                    opening.stamps = stamps;
+                    finish_opening(cx);
+                });
+            }
+        });
+        crate::engine_worker::hold(cx, crate::engine_worker::Lane::Config, task);
+    }
+    // Completion callbacks handle successful scans; this also exposes a
+    // failed scan as an error with Retry instead of an endless spinner.
+    let task = cx.spawn(async move |cx| {
+        loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(250))
+                .await;
+            let keep = cx.update(|cx| {
+                if !cx
+                    .try_global::<Opening>()
+                    .is_some_and(|opening| Rc::ptr_eq(&opening.request, &request))
+                {
+                    return false;
+                }
+                finish_opening(cx);
+                cx.try_global::<Opening>().is_some()
+            });
+            if !keep {
+                break;
+            }
+        }
+    });
+    crate::engine_worker::hold(cx, crate::engine_worker::Lane::Onboarding, task);
+}
+
+struct Opening {
+    request: Rc<()>,
+    window: WindowHandle<Preparing>,
+    facts: Facts,
+    config: Option<PathBuf>,
+    config_ready: bool,
+    stamps: crate::engine_worker::Stamps,
+}
+impl gpui_kit::Global for Opening {}
+pub(crate) struct Preparing {
+    failure: Option<String>,
+}
+impl Render for Preparing {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl gpui_kit::IntoElement {
+        use gpui_kit::{InteractiveElement as _, StatefulInteractiveElement as _};
+        gpui_kit::div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .p(crate::theme::px(32.0))
+            .gap(crate::theme::px(16.0))
+            .bg(crate::theme::bg_app())
+            .child(crate::theme::text(
+                "Set up PwrRoute",
+                20.0,
+                600.0,
+                crate::theme::text_primary(),
+            ))
+            .child(crate::theme::text(
+                self.failure
+                    .clone()
+                    .unwrap_or_else(|| "Reading the config and looking for browsers…".into()),
+                13.0,
+                500.0,
+                crate::theme::text_muted(),
+            ))
+            .children(self.failure.as_ref().map(|_| {
+                crate::widgets::button("Try again", crate::widgets::ButtonKind::Default, true)
+                    .id("setup-retry-scan")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        crate::browser_scan::rescan(cx);
+                        this.failure = None;
+                        cx.notify();
+                    }))
+            }))
+    }
+}
+
+fn restart_opening(cx: &mut App) {
+    if let Some(window) = cx.try_global::<Opening>().map(|opening| opening.window) {
+        cx.remove_global::<Opening>();
+        let _ = window.update(cx, |_, window, _| window.remove_window());
+        open(cx);
+    }
+}
+
+fn finish_opening(cx: &mut App) {
+    let Some(opening) = cx.try_global::<Opening>() else {
+        return;
+    };
+    let window = opening.window;
+    if opening.config != crate::router::config_in_charge()
+        || (opening.config_ready && !crate::engine_worker::unchanged(&opening.stamps))
+    {
+        restart_opening(cx);
+        return;
+    }
+    if let Some(error) = crate::browser_scan::error(cx) {
+        let _ = window.update(cx, |view, _, cx| {
+            view.failure = Some(error);
+            cx.notify();
+        });
+        return;
+    }
+    if !opening.config_ready || crate::browser_scan::is_loading(cx) {
+        return;
+    }
+    let mut facts = opening.facts.clone();
+    facts.refresh_saved();
+    facts.browsers = choices(crate::browser_scan::apps(cx), &hidden(cx));
+    facts.handler = default_browser::state(cx);
+    cx.remove_global::<Opening>();
+    let _ = window.update(cx, |_, window, _| window.remove_window());
+    open_ready(facts, cx);
+}
+
+/// Updates browser facts only; setup choices and config review stay intact.
+pub fn refresh_browsers(cx: &mut App) {
+    let loading = crate::browser_scan::is_loading(cx);
+    let error = crate::browser_scan::error(cx);
+    let browsers = choices(crate::browser_scan::apps(cx), &hidden(cx));
+    for window in cx.windows() {
+        if let Some(window) = window.downcast::<FirstRun>() {
+            let _ = window.update(cx, |view, _, cx| {
+                view.browser_scan_completed(browsers.clone(), loading, error.clone(), cx);
+                if !loading && error.is_none() {
+                    view.preselect(cx);
+                }
+            });
+        }
+    }
+    finish_opening(cx);
+}
+
+fn open_ready(facts: Facts, cx: &mut App) {
     let model = model(&facts, std::env::home_dir().as_deref());
     let window = match first_run::open(model, hooks(), cx) {
         Ok(window) => window,
@@ -854,6 +1099,7 @@ pub fn open(cx: &mut App) {
     cx.on_window_closed(move |cx, id| {
         let open = cx.try_global::<Open>().map(|open| open.window.window_id());
         if open == Some(id) {
+            crate::engine_worker::cancel_service(cx, crate::engine_worker::Lane::Onboarding);
             cx.remove_global::<Open>();
             mark_completed(pwrroute_os::data_dir().as_deref());
         }
@@ -992,13 +1238,13 @@ mod tests {
         let fallback = model.fallback.clone();
         let mut browser = chrome();
         browser.profiles_blocked = true;
-        refresh_browser_model(&mut model, vec![browser.clone()], true);
+        model.refresh_browsers(vec![browser.clone()], true);
         assert_eq!(model.access.as_ref().unwrap().browsers.len(), 1);
         assert_eq!(model.still_blocked().len(), 1);
         model.access.as_mut().unwrap().skipped = true;
         model.access.as_mut().unwrap().still_blocked = true;
         browser.profiles_blocked = false;
-        refresh_browser_model(&mut model, vec![browser], true);
+        model.refresh_browsers(vec![browser], true);
         assert!(model.access.as_ref().unwrap().skipped);
         assert!(!model.access.as_ref().unwrap().still_blocked);
         assert!(model.still_blocked().is_empty());
@@ -1052,6 +1298,8 @@ mod tests {
             precedence: Precedence::Config,
             state: State::default(),
             access_pane: true,
+            rules_path: None,
+            state_dir: None,
         }
     }
 
@@ -2002,9 +2250,11 @@ mod tests {
         assert_eq!(RulesFile::load(&target).unwrap(), file);
         assert_eq!(fs::read(source).unwrap(), original);
         let replies = replies.borrow();
-        let Some((imported, summary)) = &replies[1] else {
+        let Some(result) = &replies[1] else {
             panic!("import completed")
         };
+        let imported = result.current.as_ref().unwrap();
+        let summary = &result.summary;
         assert_eq!(imported.rules, 1);
         assert!(summary.contains("2 of 2 passed"), "{summary}");
     }
@@ -2245,5 +2495,210 @@ mod tests {
         );
         assert_eq!(main_window_display(Some(gone), None, &connected), None);
         assert_eq!(main_window_display(None, None, &connected), None);
+    }
+    #[gpui_kit::test]
+    fn initial_scan_shows_preparing_and_close_cancels_without_opening_or_saving_setup(
+        cx: &mut TestAppContext,
+    ) {
+        let (release, wait) = async_channel::bounded(1);
+        cx.update(|cx| {
+            crate::browser_scan::install(
+                pwrroute_browsers::Env::fixture(
+                    pwrroute_browsers::Platform::current(),
+                    std::env::temp_dir(),
+                ),
+                cx,
+            );
+            crate::browser_scan::set_test_producer(
+                cx,
+                std::sync::Arc::new(move || {
+                    let wait = wait.clone();
+                    Box::pin(async move { wait.recv().await.unwrap() })
+                }),
+            );
+            install(cx);
+            let _ = crate::browser_scan::apps(cx);
+            let mut facts = facts();
+            facts.finicky = None;
+            facts.browsers.clear();
+            prepare(facts, None, cx);
+            assert!(cx.has_global::<Opening>());
+            assert!(!cx.has_global::<Open>());
+            assert!(crate::settings_store::store(cx).is_none());
+        });
+        cx.run_until_parked();
+        let window = cx.update(|cx| cx.global::<Opening>().window);
+        let _ = window.update(cx, |view, window, _| {
+            assert!(view.failure.is_none());
+            window.remove_window();
+        });
+        cx.run_until_parked();
+        release.try_send(Ok(vec![])).unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(!cx.has_global::<Opening>());
+            assert!(!cx.has_global::<Open>());
+            assert!(cx.windows().is_empty());
+            assert!(crate::settings_store::store(cx).is_none());
+        });
+    }
+    #[test]
+    fn engine_review_first_run_config_tracks_imported_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.js");
+        let dependency = dir.path().join("policy.js");
+        fs::write(
+            &config,
+            "import browser from './policy.js'; export default { defaultBrowser: browser };",
+        )
+        .unwrap();
+        fs::write(&dependency, "export default 'Safari';").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&dependency)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10))
+            .unwrap();
+        let (found, stamps) = FinickyFound::read_with_stamps(config);
+        assert_eq!(found.default_browser.as_deref(), Some("Safari"));
+        assert!(crate::engine_worker::unchanged(&stamps));
+        fs::write(&dependency, "export default 'Firefox';").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&dependency)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20))
+            .unwrap();
+        assert!(
+            !crate::engine_worker::unchanged(&stamps),
+            "queued first-run review ignored its imported module"
+        );
+    }
+    #[gpui_kit::test]
+    fn engine_review_import_changed_while_waiting_for_scan_cannot_open_old_setup(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.js");
+        let dependency = dir.path().join("policy.js");
+        fs::write(
+            &config,
+            "import browser from './policy.js'; export default { defaultBrowser: browser };",
+        )
+        .unwrap();
+        fs::write(&dependency, "export default 'Safari';").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&dependency)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10))
+            .unwrap();
+        let (found, stamps) = FinickyFound::read_with_stamps(config);
+        let (release, wait) = async_channel::bounded(1);
+        let original = cx.update(|cx| {
+            crate::browser_scan::install(
+                pwrroute_browsers::Env::fixture(
+                    pwrroute_browsers::Platform::current(),
+                    dir.path().to_path_buf(),
+                ),
+                cx,
+            );
+            crate::browser_scan::set_test_producer(
+                cx,
+                std::sync::Arc::new(move || {
+                    let wait = wait.clone();
+                    Box::pin(async move { wait.recv().await.unwrap() })
+                }),
+            );
+            install(cx);
+            let _ = crate::browser_scan::apps(cx);
+            let mut facts = facts();
+            facts.finicky = Some(found);
+            facts.browsers.clear();
+            prepare(facts, None, cx);
+            let opening = cx.global_mut::<Opening>();
+            // The completed worker review is retained while browser discovery
+            // is still blocked. Its source identity is already accepted.
+            opening.config = crate::router::config_in_charge();
+            opening.stamps = stamps;
+            let token = opening.request.clone();
+            finish_opening(cx);
+            assert!(Rc::ptr_eq(&cx.global::<Opening>().request, &token));
+            assert!(!cx.has_global::<Open>());
+            token
+        });
+        fs::write(&dependency, "export default 'Firefox';").unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&dependency)
+            .unwrap()
+            .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20))
+            .unwrap();
+        cx.update(|cx| {
+            finish_opening(cx);
+            assert!(!cx.has_global::<Open>(), "a stale review opened FirstRun");
+            assert!(
+                !cx.try_global::<Opening>()
+                    .is_some_and(|opening| Rc::ptr_eq(&opening.request, &original)),
+                "the old review survived its dependency change"
+            );
+            if let Some(window) = cx.try_global::<Opening>().map(|opening| opening.window) {
+                let _ = window.update(cx, |_, window, _| window.remove_window());
+            }
+        });
+        cx.run_until_parked();
+        release.try_send(Ok(vec![])).unwrap();
+        cx.run_until_parked();
+        cx.update(|cx| assert!(!cx.has_global::<Open>()));
+        assert!(!dir.path().join("rules.json").exists());
+        assert!(!dir.path().join(STATE_FILE).exists());
+    }
+    #[test]
+    fn review_regression_setup_refreshes_rules_and_state_before_preselection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rules.json");
+        let mut snapshot = facts();
+        snapshot.finicky = None;
+        snapshot.rules_path = Some(path.clone());
+        snapshot.state_dir = Some(dir.path().to_owned());
+        RulesFile {
+            default_browser: "org.mozilla.firefox".into(),
+            default_profile: "Saved profile".into(),
+            ..Default::default()
+        }
+        .save(&path)
+        .unwrap();
+        State::default().save(dir.path()).unwrap();
+        snapshot.refresh_saved();
+        let current = model(&snapshot, None);
+        assert_eq!(current.fallback.as_ref().unwrap().name.as_str(), "Firefox");
+        assert_eq!(snapshot.rules_profile, "Saved profile");
+        State {
+            fallback: Some("com.google.Chrome".into()),
+            fallback_profile: Some("Saved state".into()),
+            ..Default::default()
+        }
+        .save(dir.path())
+        .unwrap();
+        snapshot.refresh_saved();
+        let current = model(&snapshot, None);
+        assert_eq!(
+            current.fallback.as_ref().unwrap().name.as_str(),
+            "Google Chrome"
+        );
+        assert_eq!(
+            snapshot.state.fallback_profile.as_deref(),
+            Some("Saved state")
+        );
+        assert_eq!(
+            RulesFile::load(&path).unwrap().default_browser,
+            "org.mozilla.firefox"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_preparing_is_a_dock_window(cx: &mut TestAppContext) {
+        cx.add_window_view(|_, _| Preparing { failure: None });
+        cx.update(|cx| assert!(crate::dock::has_dock_window(cx)));
     }
 }

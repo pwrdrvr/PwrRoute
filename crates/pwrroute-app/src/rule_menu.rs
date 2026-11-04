@@ -30,7 +30,7 @@ use pwrroute_router::Privacy;
 
 use crate::app::{Leave, PwrRoute, Screen, Selection};
 use crate::rules_model::{Destination, Matcher, Rule};
-use crate::rules_store::{Removed, RulesStore};
+use crate::rules_store::Removed;
 use crate::theme::{self, mono, text};
 use crate::try_it::Probe;
 use crate::widgets::{ButtonKind, badge, badge_for, button, menu_card, menu_row, paragraph};
@@ -77,6 +77,7 @@ pub struct RowActions {
     baseline: Option<Baseline>,
     /// Each move's count, by the row and where it would land.
     impacts: HashMap<(Selection, usize), Option<usize>>,
+    request: std::rc::Rc<()>,
 }
 
 impl RowActions {
@@ -89,10 +90,14 @@ impl RowActions {
     /// How many recent links the counts weigh, once a menu or drag read
     /// them.
     pub fn weighed(&self) -> Option<usize> {
-        self.baseline.as_ref().map(|baseline| baseline.links.len())
+        self.baseline
+            .as_ref()
+            .filter(|b| b.now.len() == b.links.len())
+            .map(|baseline| baseline.links.len())
     }
 
     fn forget_counts(&mut self) {
+        self.request = std::rc::Rc::new(());
         self.baseline = None;
         self.impacts.clear();
     }
@@ -127,9 +132,11 @@ struct Opens {
 }
 
 /// The links a move is weighed against, and where each opens now.
+#[derive(Clone)]
 struct Baseline {
     links: Vec<(String, Option<Opener>)>,
     now: Vec<Option<Opens>>,
+    stamps: crate::engine_worker::Stamps,
 }
 
 fn opens(probe: &mut Probe, url: &str, opener: Option<&Opener>) -> Option<Opens> {
@@ -159,29 +166,6 @@ fn recent_links(cx: &App) -> Option<Vec<(String, Option<Opener>)>> {
         })
         .collect();
     (links.len() >= IMPACT_MIN).then_some(links)
-}
-
-/// How many of `links` would open somewhere else, or as another URL, once
-/// `selection` moves to `to`; `None` when it would not move. Both sides
-/// are the file as written, which is what the router routes by.
-fn changes_from(
-    probe: &Probe,
-    store: &RulesStore,
-    selection: Selection,
-    to: usize,
-    links: &[(String, Option<Opener>)],
-    now: &[Option<Opens>],
-) -> Option<usize> {
-    let mut moved = store.clone();
-    moved.move_to(selection, to)?;
-    let mut after = probe.with_rules(moved.written());
-    Some(
-        links
-            .iter()
-            .zip(now)
-            .filter(|((url, opener), now)| opens(&mut after, url, opener.as_ref()) != **now)
-            .count(),
-    )
 }
 
 /// "23 links change", "1 link changes", "no recent links change".
@@ -276,6 +260,8 @@ impl PwrRoute {
         }
         self.row_actions.refused = None;
         self.row_actions.forget_counts();
+        self.row_actions.menu = Some(row);
+        cx.notify();
         if let MenuRow::Rule(selection) = row {
             let last = self.store.len_of(selection).saturating_sub(1);
             let here = position(selection);
@@ -285,44 +271,134 @@ impl PwrRoute {
                 }
             }
         }
-        self.row_actions.menu = Some(row);
-        cx.notify();
     }
 
     pub fn close_row_actions(&mut self, cx: &mut Context<'_, Self>) {
         if self.row_actions.menu.take().is_some() {
+            self.engine_worker
+                .cancel(crate::engine_worker::Lane::Impact);
+            self.row_actions.forget_counts();
             cx.notify();
         }
     }
 
     /// How many recent links moving `selection` to `to` would send
     /// elsewhere, worked out once per menu or drag.
-    pub fn impact(&mut self, selection: Selection, to: usize, cx: &App) -> Option<usize> {
+    pub fn impact(
+        &mut self,
+        selection: Selection,
+        to: usize,
+        cx: &mut Context<'_, Self>,
+    ) -> Option<usize> {
+        if self
+            .row_actions
+            .baseline
+            .as_ref()
+            .is_some_and(|baseline| !crate::engine_worker::unchanged(&baseline.stamps))
+        {
+            self.row_actions.forget_counts();
+        }
         if let Some(count) = self.row_actions.impacts.get(&(selection, to)) {
             return *count;
         }
-        if self.row_actions.baseline.is_none() {
-            self.row_actions.baseline = recent_links(cx).map(|links| {
-                let mut probe = self.probe.with_rules(self.store.written());
-                let now = links
-                    .iter()
-                    .map(|(url, opener)| opens(&mut probe, url, opener.as_ref()))
-                    .collect();
-                Baseline { links, now }
-            });
+        let links = self
+            .row_actions
+            .baseline
+            .as_ref()
+            .map(|b| b.links.clone())
+            .or_else(|| recent_links(cx))?;
+        // A drag keeps only its latest target; a menu has at most four
+        // distinct moves, even in a file containing thousands of rules.
+        if self.row_actions.drop.is_some() {
+            self.row_actions.impacts.clear();
         }
-        let count = self.row_actions.baseline.as_ref().and_then(|baseline| {
-            changes_from(
-                &self.probe,
-                &self.store,
-                selection,
-                to,
-                &baseline.links,
-                &baseline.now,
-            )
-        });
-        self.row_actions.impacts.insert((selection, to), count);
-        count
+        self.row_actions.impacts.insert((selection, to), None);
+        let moves: Vec<_> = self.row_actions.impacts.keys().copied().take(4).collect();
+        let input = self.probe.input();
+        let store = self.store.clone();
+        let saved = store.written();
+        let baseline = self.row_actions.baseline.clone();
+        let request = self.row_actions.request.clone();
+        let revision = self.engine_revision;
+        let result = self.engine_worker.submit(
+            crate::engine_worker::Lane::Impact,
+            std::time::Duration::ZERO,
+            move |_| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                let mut probe = Probe::from_input(input).with_rules(saved);
+                let mut baseline = baseline
+                    .filter(|b| crate::engine_worker::unchanged(&b.stamps))
+                    .unwrap_or(Baseline {
+                        links,
+                        now: Vec::new(),
+                        stamps: Vec::new(),
+                    });
+                let mut stamps = baseline.stamps.clone();
+                let mut moves = moves.into_iter();
+                let mut current: Option<((Selection, usize), Probe, usize, usize)> = None;
+                let mut counts = HashMap::new();
+                move || {
+                    if std::time::Instant::now() >= deadline {
+                        return Some((baseline.clone(), counts.clone(), stamps.clone()));
+                    }
+                    if baseline.now.len() < baseline.links.len() {
+                        let (url, opener) = &baseline.links[baseline.now.len()];
+                        baseline.now.push(opens(&mut probe, url, opener.as_ref()));
+                        // Keep each observed version: a module changed mid-batch
+                        // must invalidate every route calculated before that change.
+                        crate::engine_worker::retain_stamps(&mut baseline.stamps, probe.stamps());
+                        crate::engine_worker::retain_stamps(&mut stamps, probe.stamps());
+                        return None;
+                    }
+                    if current.is_none() {
+                        let Some(key @ (selection, to)) = moves.next() else {
+                            return Some((baseline.clone(), counts.clone(), stamps.clone()));
+                        };
+                        let mut moved = store.clone();
+                        if moved.move_to(selection, to).is_none() {
+                            counts.insert(key, None);
+                            return None;
+                        }
+                        current = Some((key, probe.with_rules(moved.written()), 0, 0));
+                    }
+                    let (key, after, index, changed) = current.as_mut().unwrap();
+                    let (url, opener) = &baseline.links[*index];
+                    let next = opens(after, url, opener.as_ref());
+                    crate::engine_worker::retain_stamps(&mut stamps, after.stamps());
+                    if next.is_none() || baseline.now[*index].is_none() {
+                        counts.insert(*key, None);
+                        current = None;
+                        return None;
+                    }
+                    *changed += usize::from(next != baseline.now[*index]);
+                    *index += 1;
+                    if *index == baseline.links.len() {
+                        counts.insert(*key, Some(*changed));
+                        current = None;
+                    }
+                    None
+                }
+            },
+        );
+        self.engine_tasks[crate::engine_worker::Lane::Impact as usize] =
+            Some(cx.spawn(async move |this, cx| {
+                if let Ok((mut baseline, counts, stamps)) =
+                    crate::engine_worker::receive(result).await
+                {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.engine_revision == revision
+                            && std::rc::Rc::ptr_eq(&this.row_actions.request, &request)
+                            && crate::engine_worker::unchanged(&stamps)
+                        {
+                            crate::engine_worker::retain_stamps(&mut baseline.stamps, stamps);
+                            this.row_actions.baseline = Some(baseline);
+                            this.row_actions.impacts.extend(counts);
+                            cx.notify();
+                        }
+                    });
+                }
+            }));
+        None
     }
 
     /// Moves a rule within its list. The selection, the editor and a

@@ -71,6 +71,9 @@ mod destinations;
 #[cfg(target_os = "macos")]
 #[path = "../src/editor.rs"]
 mod editor;
+#[cfg(target_os = "macos")]
+#[path = "../src/engine_worker.rs"]
+mod engine_worker;
 /// The test hook's probes, inert: the real hook needs the app's menu and
 /// `main`, which this example does not compile.
 #[cfg(target_os = "macos")]
@@ -386,6 +389,39 @@ fn setup(cx: &mut gpui_kit::App) {
     }
 }
 
+/// Fixture overrides run after initial config evaluation, and captures wait
+/// for actual worker completions rather than recording a loading frame.
+#[cfg(target_os = "macos")]
+fn settle_engine(
+    cx: &mut gpui_kit::HeadlessAppContext,
+    handle: gpui_kit::WindowHandle<app::PwrRoute>,
+) {
+    cx.allow_parking();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let mut idle = false;
+    loop {
+        cx.run_until_parked();
+        let ready = cx
+            .update_window(handle.into(), |view, _, cx| {
+                view.downcast::<app::PwrRoute>()
+                    .unwrap()
+                    .read(cx)
+                    .engine_worker
+                    .is_idle()
+            })
+            .expect("read fixture worker");
+        if ready && idle {
+            return;
+        }
+        idle = ready;
+        assert!(
+            std::time::Instant::now() < deadline,
+            "fixture engine did not complete"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// How many frames to draw before the capture: icons load off the UI
 /// thread, a few at a time.
 #[cfg(target_os = "macos")]
@@ -492,6 +528,7 @@ fn main() {
                 cx.new(|cx| PwrRoute::with_store(config, Some(home), store, cx))
             })
             .expect("open a headless window");
+        settle_engine(&mut cx, handle);
         cx.update_window(handle.into(), |view, window, cx| {
             let view = view.downcast::<PwrRoute>().expect("the PwrRoute view");
             view.update(cx, |app, cx| {
@@ -501,6 +538,7 @@ fn main() {
             });
         })
         .expect("prepare the window");
+        settle_engine(&mut cx, handle);
         // Icons load as assets: draw until they have arrived.
         cx.allow_parking();
         for _ in 0..draws() {
@@ -1503,13 +1541,14 @@ fn main() {
                 },
             )
         } else {
-            importer::ImportModel::read(
+            importer::ImportModel::read_with_stamps(
                 &importer_config,
                 None,
                 Some(&importer_config),
                 &[],
                 existing,
             )
+            .0
         };
         // Shown as the design names it, not by the fixture's path.
         model.shown = if name == "importer-finicky-rules" {
@@ -2500,6 +2539,7 @@ fn main() {
                     cx.new(|cx| PwrRoute::with_store(config, Some(home), store, cx))
                 })
                 .expect("open a headless window");
+            settle_engine(&mut cx, handle);
             cx.update_window(handle.into(), |view, _, cx| {
                 let view = view.downcast::<PwrRoute>().expect("the PwrRoute view");
                 view.update(cx, |app, cx| {
@@ -2518,6 +2558,7 @@ fn main() {
                 });
             })
             .expect("prepare the window");
+            settle_engine(&mut cx, handle);
             cx.allow_parking();
             for _ in 0..draws() {
                 cx.run_until_parked();

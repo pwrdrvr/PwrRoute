@@ -90,6 +90,7 @@ fn open(cx: &mut TestAppContext) -> (Entity<PwrRoute>, &mut VisualTestContext) {
 fn saved(cx: &mut VisualTestContext, path: &Path) -> RulesFile {
     cx.executor().advance_clock(crate::app::SAVE_DEBOUNCE);
     cx.run_until_parked();
+    draw(cx);
     RulesFile::load(path).expect("read the rules back")
 }
 
@@ -101,6 +102,13 @@ fn save_rule(cx: &mut VisualTestContext) {
 }
 
 fn draw(cx: &mut VisualTestContext) {
+    // Worker completion is an external wake; GPUI's virtual executor does
+    // not wait for OS threads. Join the work, then deliver its callbacks.
+    for _ in 0..2 {
+        cx.run_until_parked();
+        cx.update(|_, cx| crate::engine_worker::settle(cx));
+    }
+    cx.run_until_parked();
     cx.update(|window, cx| {
         window.draw(cx).clear(cx);
     });
@@ -196,6 +204,7 @@ fn type_sample(cx: &mut VisualTestContext) {
 }
 
 fn trace(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> TraceView {
+    draw(cx);
     view.read_with(cx, |app, _| app.test.outcome.clone())
         .expect("Test a link ran")
         .expect("the trace resolved")
@@ -7590,7 +7599,7 @@ fn an_old_short_link_expansion_cannot_replace_a_new_test(cx: &mut TestAppContext
         assert!(app.test.expanding);
         app.test.url.text = "https://example.com/new".into();
         app.test.run(cx);
-        assert!(!app.test.expanding);
+        assert!(app.test.expanding);
     });
     let latest = trace(&view, cx);
     cx.run_until_parked();
@@ -7693,7 +7702,7 @@ fn changing_config_source_invalidates_the_old_test_instance_request(cx: &mut Tes
         app.set_config(Some(off), cx);
         app.test.url.text = "https://go.example.com/neutral".into();
         app.test.run(cx);
-        assert!(!app.test.expanding);
+        assert!(app.test.expanding);
     });
     let latest = trace(&view, cx);
     assert_eq!(latest.result.title, "Safari");
@@ -7703,5 +7712,653 @@ fn changing_config_source_invalidates_the_old_test_instance_request(cx: &mut Tes
         trace(&view, cx),
         latest,
         "the old instance must not finish into the new one"
+    );
+}
+
+// Engine work must be scheduled, even for fast configs: these assertions
+// execute inside one GPUI update, before any completion can be delivered.
+#[gpui_kit::test]
+fn engine_work_startup_returns_before_saved_tests_complete(cx: &mut TestAppContext) {
+    let dir = scratch("async-startup-tests");
+    let store = store_for(&dir, &rules_with_examples());
+    cx.add_window_view(|_, cx| {
+        let app = PwrRoute::with_store(None, Some(fixture_home()), store, cx);
+        assert!(
+            app.tests.report().is_none(),
+            "startup evaluated saved tests on GPUI"
+        );
+        assert!(
+            app.tests.ran_at().is_none(),
+            "pending tests must not look completed"
+        );
+        app
+    });
+}
+
+#[gpui_kit::test]
+fn engine_work_test_link_returns_before_tracing(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    view.update(cx, |app, cx| {
+        app.test.url.text = "https://example.com/worker".into();
+        app.test.run(cx);
+        assert!(app.test.outcome.is_none(), "Test a link traced on GPUI");
+    });
+}
+
+#[gpui_kit::test]
+fn engine_work_menu_opens_before_impact_counts(cx: &mut TestAppContext) {
+    let records = vec![
+        fixtures::activity()
+            .into_iter()
+            .find(|r| r.privacy == Privacy::Full)
+            .unwrap();
+        24
+    ];
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open(cx);
+    view.update(cx, |app, cx| {
+        let menu = crate::rule_menu::MenuRow::Rule(Selection::Handler(2));
+        app.toggle_row_actions(menu, cx);
+        assert_eq!(app.row_actions.menu, Some(menu));
+        assert_eq!(
+            app.impact(Selection::Handler(2), 0, cx),
+            None,
+            "opening the menu evaluated recent links on GPUI"
+        );
+    });
+}
+
+struct EngineGate {
+    release: Option<std::sync::mpsc::Sender<()>>,
+    _result: async_channel::Receiver<()>,
+}
+impl Drop for EngineGate {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+    }
+}
+fn gate_engine(view: &Entity<PwrRoute>, cx: &mut VisualTestContext) -> EngineGate {
+    let (entered, started) = std::sync::mpsc::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let result = view.read_with(cx, |app, _| {
+        app.engine_worker
+            .once(crate::engine_worker::Lane::Config, move || {
+                entered.send(()).unwrap();
+                blocked.recv().unwrap();
+            })
+    });
+    started.recv().unwrap();
+    EngineGate {
+        release: Some(release),
+        _result: result,
+    }
+}
+
+#[gpui_kit::test]
+fn engine_work_slow_job_keeps_menu_and_edits_immediate(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| {
+        let row = crate::rule_menu::MenuRow::Rule(Selection::Handler(2));
+        app.toggle_row_actions(row, cx);
+        assert_eq!(app.row_actions.menu, Some(row));
+        app.store
+            .set_pattern(Selection::Handler(0), 0, "new.example.com/*");
+        app.refresh(cx);
+        assert_eq!(app.store.edited().rules[0].patterns[0], "new.example.com/*");
+        assert!(app.rail.as_ref().unwrap().try_result.is_none());
+    });
+    drop(gate);
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.rail.as_ref().unwrap().try_result.is_some()));
+}
+
+#[gpui_kit::test]
+fn engine_work_ready_old_preview_cannot_replace_new_edit_or_source(cx: &mut TestAppContext) {
+    let dir = scratch("stale-preview-source");
+    let one = dir.join("one.js");
+    let two = dir.join("two.js");
+    std::fs::write(&one, "export default { defaultBrowser: 'Safari' }").unwrap();
+    std::fs::write(&two, "export default { defaultBrowser: 'Firefox' }").unwrap();
+    let (view, cx) = open(cx);
+    view.update(cx, |app, cx| {
+        app.set_config(Some(one), cx);
+        let rail = app.rail.as_mut().unwrap();
+        rail.sample_edited = true;
+        rail.sample.set("https://unmatched.example.com/old");
+        app.try_it(cx);
+    });
+    // Completion is ready, but GPUI has not delivered it yet.
+    view.read_with(cx, |app, _| app.engine_worker.client())
+        .wait_idle();
+    view.update(cx, |app, cx| {
+        app.set_config(Some(two.clone()), cx);
+        app.store
+            .set_pattern(Selection::Handler(0), 0, "changed.example.com/*");
+        app.refresh(cx);
+    });
+    draw(cx);
+    let (path, result) = view.read_with(cx, |app, _| {
+        (
+            app.config.as_ref().unwrap().file.clone(),
+            app.rail.as_ref().unwrap().try_result.clone(),
+        )
+    });
+    assert_eq!(path, two);
+    let result = format!("{result:?}");
+    assert!(result.contains("Firefox"), "{result}");
+    assert!(!result.contains("Safari"), "{result}");
+}
+
+#[gpui_kit::test]
+fn engine_work_sheet_rejects_changed_validation_and_cancelled_identity(cx: &mut TestAppContext) {
+    let dir = scratch("stale-sheet-validation");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    let before = view.read_with(cx, |app, _| app.store.written());
+    view.update(cx, |app, cx| {
+        app.set_add_rule(
+            |s| {
+                s.browser = "Firefox".into();
+                s.pattern.set("github.com/*");
+            },
+            cx,
+        )
+    });
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| {
+        assert!(!app.add_rule_from_sheet(cx));
+        app.set_add_rule(
+            |s| {
+                s.browser = "Safari".into();
+                s.only_from = !s.only_from;
+                s.position = crate::activity_actions::Position::Bottom;
+            },
+            cx,
+        );
+        assert_eq!(app.store.written(), before);
+    });
+    drop(gate);
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.written()),
+        before,
+        "stale validation added a different rule"
+    );
+    // A second gated check belongs to this sheet alone.
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| {
+        assert!(!app.add_rule_from_sheet(cx));
+    });
+    view.update_in(cx, |app, window, cx| {
+        app.cancel_add_rule(window, cx);
+    });
+    drop(gate);
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.actions.sheet.is_none()));
+    assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
+}
+
+#[gpui_kit::test]
+fn engine_work_collision_revision_never_claims_old_pattern_is_clear(cx: &mut TestAppContext) {
+    let dir = scratch("stale-sheet-collisions");
+    let (view, cx) = open_activity(cx, &dir, None);
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| {
+        app.set_add_rule(|s| s.pattern.set("github.com/*"), cx);
+        app.add_rule_input_changed(cx);
+        app.set_add_rule(|s| s.pattern.set("never.example.com/*"), cx);
+        app.add_rule_input_changed(cx);
+        app.store
+            .set_pattern(Selection::Handler(0), 0, "changed.example.com/*");
+        app.refresh(cx);
+        assert_eq!(
+            app.actions
+                .sheet
+                .as_ref()
+                .unwrap()
+                .collision_error
+                .as_deref(),
+            Some("Checking matches…")
+        );
+    });
+    drop(gate);
+    draw(cx);
+    view.read_with(cx, |app, _| {
+        let sheet = app.actions.sheet.as_ref().unwrap();
+        assert_eq!(sheet.pattern.text, "never.example.com/*");
+        assert!(sheet.collisions.is_empty());
+        assert!(sheet.collision_error.is_none());
+    });
+}
+
+#[gpui_kit::test]
+fn engine_work_add_rechecks_config_changed_after_warning_before_commit(cx: &mut TestAppContext) {
+    let dir = scratch("recheck-sheet-config");
+    let config = dir.join("config.js");
+    std::fs::write(&config, "export default { defaultBrowser: 'Safari', handlers: [{ match: '*', browser: 'Safari' }] }").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&config)
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(10))
+        .unwrap();
+    let (view, cx) = open_activity(cx, &dir, Some(config.clone()));
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    view.update(cx, |app, cx| {
+        app.set_add_rule(
+            |s| {
+                s.browser = "Firefox".into();
+                s.position = crate::activity_actions::Position::Top;
+                s.pattern.set("github.com/*");
+            },
+            cx,
+        )
+    });
+    view.update(cx, |app, cx| {
+        assert!(!app.add_rule_from_sheet(cx));
+    });
+    draw(cx);
+    assert!(sheet_problem(&view, cx).is_some());
+    let before = view.read_with(cx, |app, _| app.store.written());
+    std::fs::write(&config, "export default { defaultBrowser: 'Firefox' }").unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&config)
+        .unwrap()
+        .set_modified(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(20))
+        .unwrap();
+    view.update(cx, |app, cx| {
+        assert!(
+            !app.add_rule_from_sheet(cx),
+            "stale warning allowed a write without rechecking config"
+        );
+        assert_eq!(app.store.written(), before);
+    });
+    draw(cx);
+    assert!(
+        view.read_with(cx, |app, _| app.actions.sheet.is_none()),
+        "fresh validation can add the rule"
+    );
+}
+
+struct GatedLinkNetwork {
+    entered: std::sync::mpsc::Sender<()>,
+    release: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+}
+impl pwrroute_engine::Network for GatedLinkNetwork {
+    fn request(
+        &self,
+        _: pwrroute_engine::Method,
+        _: &str,
+        _: std::time::Duration,
+    ) -> anyhow::Result<pwrroute_engine::Reply> {
+        if let Some(release) = self.release.lock().unwrap().take() {
+            self.entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
+        anyhow::bail!("fixture offline")
+    }
+}
+
+#[gpui_kit::test]
+fn engine_review_gated_link_http_does_not_block_preview_and_superseded_result(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = open(cx);
+    let (entered, started) = std::sync::mpsc::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let gate = EngineGate {
+        release: Some(release),
+        _result: async_channel::bounded(1).1,
+    };
+    view.update(cx, |app, cx| {
+        app.test.network = Some(std::sync::Arc::new(GatedLinkNetwork {
+            entered,
+            release: std::sync::Mutex::new(Some(blocked)),
+        }));
+        app.test.url.text = "https://bit.ly/neutral".into();
+        app.test.run(cx);
+    });
+    started
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let (completed, preview) = std::sync::mpsc::channel();
+    let _result = view.read_with(cx, |app, _| {
+        let input = app.probe.input();
+        app.engine_worker
+            .once(crate::engine_worker::Lane::Preview, move || {
+                let result = crate::try_it::Probe::from_input(input)
+                    .opens("https://example.com/independent", None);
+                let _ = completed.send(result);
+            })
+    });
+    assert!(
+        preview
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("HTTP blocked independent engine preview")
+            .is_some()
+    );
+    view.update(cx, |app, cx| {
+        app.test.url.text = "https://example.com/latest".into();
+        app.test.run(cx);
+    });
+    drop(gate);
+    assert_eq!(trace(&view, cx).result.url, "https://example.com/latest");
+}
+
+#[gpui_kit::test]
+fn engine_review_cached_menu_baseline_rejects_changed_import(cx: &mut TestAppContext) {
+    let dir = scratch("cached-impact-import");
+    let config = dir.join("config.js");
+    let dependency = dir.join("policy.js");
+    std::fs::write(
+        &config,
+        "import policy from './policy.js'; export default policy;",
+    )
+    .unwrap();
+    let write = |text: &str, seconds| {
+        std::fs::write(&dependency, text).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&dependency)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            )
+            .unwrap();
+    };
+    write("export default { defaultBrowser: 'Safari' };", 10);
+    let base = fixtures::activity()
+        .into_iter()
+        .find(|r| r.privacy == Privacy::Full)
+        .unwrap();
+    let records = (0..24)
+        .map(|i| {
+            record_like(
+                &base,
+                2000 + i,
+                "https://example.com/a",
+                Matched::Rule { index: 0 },
+            )
+        })
+        .collect();
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let rules: RulesFile = serde_json::from_str(
+        r#"{"rules":[{"match":"*","browser":"Safari"},{"match":"*","browser":"Firefox"}]}"#,
+    )
+    .unwrap();
+    let (view, cx) = open_store(cx, Some(config), store_for(&dir, &rules));
+    view.update(cx, |app, cx| {
+        app.impact(Selection::Handler(1), 0, cx);
+    });
+    draw(cx);
+    view.update(cx, |app, cx| {
+        assert_eq!(app.impact(Selection::Handler(1), 0, cx), Some(24));
+    });
+    write(
+        "export default { defaultBrowser: 'Firefox', handlers: [{ match: '*', browser: 'Firefox' }] };",
+        20,
+    );
+    view.update(cx, |app, cx| {
+        assert_eq!(app.impact(Selection::Handler(0), 1, cx), None);
+    });
+    draw(cx);
+    view.update(cx, |app, cx| {
+        assert_ne!(
+            app.impact(Selection::Handler(0), 1, cx),
+            Some(24),
+            "cached old baseline was compared with a new config"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn engine_review_link_policy_changed_during_http_is_reloaded(cx: &mut TestAppContext) {
+    let dir = scratch("link-policy-during-http");
+    let config = dir.join("config.js");
+    let policy = dir.join("policy.js");
+    std::fs::write(
+        &config,
+        "import policy from './policy.js'; export default policy;",
+    )
+    .unwrap();
+    let write = |body: &str, seconds| {
+        std::fs::write(&policy, body).unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&policy)
+            .unwrap()
+            .set_modified(
+                std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+            )
+            .unwrap();
+    };
+    write(
+        "export default { defaultBrowser: 'Safari', options: { urlShorteners: ['bit.ly'] } };",
+        10,
+    );
+    let (view, cx) = open_with(cx, Some(config));
+    let (entered, started) = std::sync::mpsc::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let gate = EngineGate {
+        release: Some(release),
+        _result: async_channel::bounded(1).1,
+    };
+    view.update(cx, |app, cx| {
+        app.test.network = Some(std::sync::Arc::new(GatedLinkNetwork {
+            entered,
+            release: std::sync::Mutex::new(Some(blocked)),
+        }));
+        app.test.url.text = "https://bit.ly/neutral".into();
+        app.test.run(cx);
+    });
+    started
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    write(
+        "export default { defaultBrowser: 'Firefox', options: { urlShorteners: [] } };",
+        20,
+    );
+    drop(gate);
+    let traced = trace(&view, cx);
+    assert_eq!(traced.result.title, "Firefox");
+    assert_eq!(traced.result.url, "https://bit.ly/neutral");
+}
+
+#[gpui_kit::test]
+fn engine_review_closing_link_owner_cancels_gated_completion(cx: &mut TestAppContext) {
+    let (view, cx) = open(cx);
+    let (entered, started) = std::sync::mpsc::channel();
+    let (release, blocked) = std::sync::mpsc::channel();
+    let gate = EngineGate {
+        release: Some(release),
+        _result: async_channel::bounded(1).1,
+    };
+    view.update(cx, |app, cx| {
+        app.test.network = Some(std::sync::Arc::new(GatedLinkNetwork {
+            entered,
+            release: std::sync::Mutex::new(Some(blocked)),
+        }));
+        app.test.url.text = "https://bit.ly/neutral".into();
+        app.test.run(cx);
+    });
+    started
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    view.update(cx, |app, cx| {
+        app.test = crate::test_link::TestLink::new(
+            None,
+            None,
+            app.engine_worker.client(),
+            app.link_io.client(),
+            app.store.written(),
+            cx,
+        );
+    });
+    drop(gate);
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| app.test.outcome.is_none()));
+}
+
+#[gpui_kit::test]
+fn review_regression_menu_probe_cannot_cancel_explicit_example_save(cx: &mut TestAppContext) {
+    let dir = scratch("save-vs-menu");
+    let base = fixtures::activity()[0].clone();
+    let records = vec![
+        routed_by_rule(
+            &base,
+            901,
+            "https://tickets.example.com/save",
+            1,
+            "Firefox",
+            "",
+        ),
+        routed_by_rule(
+            &base,
+            902,
+            "https://docs.example.com/menu",
+            0,
+            "Firefox",
+            "",
+        ),
+    ];
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, store_for(&dir, &attribution_rules()));
+    let gate = gate_engine(&view, cx);
+    let save = RowKey {
+        id: DispatchId(901),
+        journaled: false,
+    };
+    let menu = RowKey {
+        id: DispatchId(902),
+        journaled: false,
+    };
+    view.update(cx, |app, cx| {
+        app.save_record_as_example(save, cx);
+        app.toggle_row_menu(menu, cx);
+    });
+    drop(gate);
+    draw(cx);
+    assert!(view.read_with(cx, |app, _| {
+        app.store.written().rules[1]
+            .examples
+            .iter()
+            .any(|s| s == "https://tickets.example.com/save")
+    }));
+}
+
+#[gpui_kit::test]
+fn review_regression_failed_config_check_allows_explicit_add_anyway(cx: &mut TestAppContext) {
+    let dir = scratch("add-unchecked");
+    let config = dir.join("config.js");
+    std::fs::write(&config, "export default { defaultBrowser: 'Safari' }").unwrap();
+    let (view, cx) = open_activity(cx, &dir, Some(config.clone()));
+    click(cx, "activity-row-4");
+    click(cx, "activity-add-rule-4");
+    view.update(cx, |app, cx| {
+        app.set_add_rule(
+            |s| {
+                s.browser = "Firefox".into();
+                s.pattern.set("new.example.com/*");
+            },
+            cx,
+        )
+    });
+    std::fs::write(&config, "export default {").unwrap();
+    let before = view.read_with(cx, |app, _| app.store.written());
+    view.update(cx, |app, cx| {
+        assert!(!app.add_rule_from_sheet(cx));
+    });
+    draw(cx);
+    assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
+    view.update(cx, |app, cx| {
+        app.set_add_rule(|sheet| sheet.pattern.set("changed.example.com/*"), cx);
+        assert!(
+            !app.add_rule_from_sheet(cx),
+            "changed rule reused unchecked validation"
+        );
+    });
+    draw(cx);
+    assert_eq!(view.read_with(cx, |app, _| app.store.written()), before);
+    view.update(cx, |app, cx| {
+        assert!(
+            app.add_rule_from_sheet(cx),
+            "explicit override repeated failed validation"
+        );
+    });
+    draw(cx);
+    assert_eq!(
+        view.read_with(cx, |app, _| app.store.written().rules.len()),
+        before.rules.len() + 1
+    );
+}
+
+#[gpui_kit::test]
+fn review_regression_example_commands_are_bounded_and_finish_in_order(cx: &mut TestAppContext) {
+    let dir = scratch("bounded-example-commands");
+    let base = fixtures::activity()[0].clone();
+    let records = (0..40)
+        .map(|i| {
+            routed_by_rule(
+                &base,
+                1_100 + i,
+                &format!("https://tickets.example.com/save-{i}"),
+                1,
+                "Firefox",
+                "",
+            )
+        })
+        .collect();
+    cx.update(|cx| activity::install_feed(Feed::from_records(records), cx));
+    let (view, cx) = open_store(cx, None, store_for(&dir, &attribution_rules()));
+    let gate = gate_engine(&view, cx);
+    view.update(cx, |app, cx| {
+        for i in 0..40 {
+            app.save_record_as_example(
+                RowKey {
+                    id: DispatchId(1_100 + i),
+                    journaled: false,
+                },
+                cx,
+            );
+        }
+        assert!(
+            app.actions
+                .note
+                .as_ref()
+                .unwrap()
+                .1
+                .contains("Too many example saves")
+        );
+        app.toggle_row_menu(
+            RowKey {
+                id: DispatchId(1_139),
+                journaled: false,
+            },
+            cx,
+        );
+    });
+    drop(gate);
+    draw(cx);
+    let written = saved(cx, &dir.join("rules.json"));
+    assert_eq!(written.rules[1].examples.len(), 32);
+    for i in 0..32 {
+        assert!(
+            written.rules[1]
+                .examples
+                .contains(&format!("https://tickets.example.com/save-{i}"))
+        );
+    }
+    assert!(
+        !written.rules[1]
+            .examples
+            .contains(&"https://tickets.example.com/save-39".to_owned())
     );
 }

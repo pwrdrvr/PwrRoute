@@ -1436,7 +1436,7 @@ impl PwrRoute {
     /// Runs every example and test now: Run tests, and each save.
     pub fn run_tests(&mut self, cx: &mut Context<'_, Self>) {
         self.tests.set_rules(self.store.edited());
-        self.tests.run();
+        self.schedule_tests(cx);
         cx.notify();
     }
 

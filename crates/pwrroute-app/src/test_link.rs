@@ -15,14 +15,14 @@
 //! the Finicky config in charge (if any) and the `rules.json` the Rules
 //! screen edits, as the file stands once every saveable edit is written
 //! (`RulesStore::written`), so `precedence` orders them as it routes. It is
-//! built on the first test and lives on the UI thread; QuickJS runtimes are
-//! not `Send`.
+//! built and used on the dedicated UI engine worker; QuickJS runtimes
+//! never cross threads.
 
 use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::Arc,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, Instant},
 };
 
 use crate::theme::px;
@@ -33,8 +33,8 @@ use gpui_kit::{
     StrikethroughStyle, Styled as _, StyledText, Window, deferred, div,
 };
 use pwrroute_engine::{
-    AppType, Engine, Expectation, HttpNetwork, Limits, Link, NativeHost, Network, RouteTest,
-    RulesFile, Sources, Trace,
+    AppType, Expectation, HttpNetwork, Limits, Link, NativeHost, Network, RouteTest, RulesFile,
+    Sources, Trace,
 };
 
 use crate::app::PwrRoute;
@@ -131,20 +131,23 @@ pub struct TestLink {
     /// The run was saved as this test (its index in `tests`) since the
     /// last run.
     pub saved_as: Option<usize>,
+    task: Option<gpui_kit::Task<()>>,
+    worker: crate::engine_worker::Client,
+    io: crate::engine_worker::IoClient,
     config: Option<PathBuf>,
     /// The config as the user knows it (`~/.finicky.ts`), for the trace's
     /// last step: whose default took the link.
     config_name: Option<String>,
     rules: RulesFile,
+    machine: pwrroute_engine::MachineFile,
     /// Handed in by the window, or built on the first test. A load error is
     /// not kept, so the next test tries again (after the config is fixed,
     /// say).
-    engine: Option<Engine>,
     /// The engine's files and when each last changed, as it was built: a
     /// test after any of them changes builds it again.
-    loaded: Vec<(PathBuf, Option<SystemTime>)>,
     run: Option<Run>,
     request_token: Rc<()>,
+    /// Loading, expanding or tracing on the worker.
     pub expanding: bool,
     /// Tests inject a network; the real client is created off the UI thread.
     pub(crate) network: Option<Arc<dyn Network + Send + Sync>>,
@@ -152,22 +155,27 @@ pub struct TestLink {
     pub outcome: Option<Result<TraceView, String>>,
 }
 
+impl Drop for TestLink {
+    fn drop(&mut self) {
+        self.worker.cancel(crate::engine_worker::Lane::Link);
+        self.io.cancel();
+    }
+}
+
 impl TestLink {
     /// `config` is the Finicky config in charge, if any (`home` shortens
-    /// its path to `~/…`), and `engine` the engine the window already loaded
-    /// it in (config alone). `rules` is the visual rules file as the router
+    /// its path to `~/…`). `worker` owns the engines; `rules` is the visual
+    /// rules file as the router
     /// reads it: with a config in charge the two route together, in the
     /// order `rules.json`'s `precedence` says, and so does this.
     pub fn new(
         config: Option<PathBuf>,
         home: Option<&Path>,
-        engine: Option<Engine>,
+        worker: crate::engine_worker::Client,
+        io: crate::engine_worker::IoClient,
         rules: RulesFile,
         cx: &mut App,
     ) -> Self {
-        // The window's engine has the config alone: it resolves as the
-        // router does only while rules.json adds nothing.
-        let engine = engine.filter(|_| rules.is_empty());
         Self {
             url: TextField::new("", cx),
             opener: 0,
@@ -180,9 +188,11 @@ impl TestLink {
                 .as_deref()
                 .map(|path| crate::config_view::display_path(path, home)),
             config,
+            task: None,
+            worker,
+            io,
             rules,
-            loaded: engine.as_ref().map(stamps).unwrap_or_default(),
-            engine,
+            machine: crate::sync::machine(),
             run: None,
             request_token: Rc::new(()),
             expanding: false,
@@ -233,7 +243,10 @@ impl TestLink {
     /// Resolves the field's URL and records the trace. An empty field is
     /// nothing to test, not an error.
     pub fn run(&mut self, cx: &mut Context<'_, PwrRoute>) {
+        self.task = None;
         self.request_token = Rc::new(());
+        self.worker.cancel(crate::engine_worker::Lane::Link);
+        self.io.cancel();
         self.expanding = false;
         self.copied = false;
         self.saved_as = None;
@@ -255,59 +268,125 @@ impl TestLink {
         };
         let opener = self.opener();
         let started = Instant::now();
-        let short_links = match self.engine() {
-            Ok(engine) => engine.short_links().clone(),
-            Err(error) => {
-                self.run = None;
-                self.outcome = Some(Err(error));
-                return;
-            }
-        };
-        if !short_links.is_short(&url) {
-            self.finish(Link::new(url), opener, started);
-            return;
-        }
         self.run = None;
         self.outcome = None;
         self.expanding = true;
         let request_token = Rc::clone(&self.request_token);
         let field = self.url.text.clone();
-        let loaded = self.loaded.clone();
         let network = self.network.clone();
-        let expanded = cx.background_executor().spawn(async move {
-            let network = network.unwrap_or_else(|| Arc::new(HttpNetwork::new()));
-            short_links.expand(&url, network.as_ref())
-        });
-        cx.spawn(async move |this, cx| {
-            let link = expanded.await;
-            let _ = this.update(cx, |this, cx| {
-                if Rc::ptr_eq(&this.test.request_token, &request_token) {
-                    this.test.expanding = false;
-                    if this.test.url.text == field && this.test.opener() == opener {
-                        if loaded.iter().any(|(path, at)| modified(path) != *at) {
-                            this.test.run(cx);
+        self.machine = crate::sync::machine();
+        let machine = self.machine.clone();
+        let sources = Sources {
+            config: self.config.clone(),
+            rules: self.rules.clone(),
+            machine: self.machine.clone(),
+        };
+        // Fetch the window's bounded worker without borrowing PwrRoute.
+        let io = self.io.clone();
+        let worker = self.worker.submit_poll(
+            crate::engine_worker::Lane::Link,
+            Duration::ZERO,
+            move |_, wake| {
+                let before = crate::engine_worker::primary(sources.config.as_deref());
+                let engine = crate::router::engine_as_routed(
+                    &sources,
+                    Rc::new(NativeHost::new()),
+                    Limits::default(),
+                )
+                .map_err(|e| format!("The rules did not load: {e:#}"));
+                let stamps = engine.as_ref().map_or_else(
+                    |_| before.clone(),
+                    |engine| crate::engine_worker::dependencies(before.clone(), engine),
+                );
+                let engine_opener = opener.as_ref().map(|app| pwrroute_engine::Opener {
+                    name: app.name.to_string(),
+                    bundle_id: app.bundle_id.to_string(),
+                    ..Default::default()
+                });
+                let mut expansion = None;
+                let mut link = None;
+                move || {
+                    use std::task::Poll;
+                    let engine = match &engine {
+                        Ok(engine) => engine,
+                        Err(error) => {
+                            return Poll::Ready(Some((Err(error.clone()), stamps.clone())));
+                        }
+                    };
+                    if link.is_none() {
+                        if !engine.short_links().is_short(&url) {
+                            link = Some(Link::new(&url));
                         } else {
-                            this.test.finish(link, opener, started);
+                            if expansion.is_none() {
+                                let policy = engine.short_links().clone();
+                                let url = url.clone();
+                                let network = network.clone();
+                                expansion = Some(io.submit(wake.clone(), move || {
+                                    let network =
+                                        network.unwrap_or_else(|| Arc::new(HttpNetwork::new()));
+                                    policy.expand(&url, network.as_ref())
+                                }));
+                            }
+                            match expansion.as_ref().unwrap().try_recv() {
+                                Ok(expanded) => link = Some(expanded),
+                                Err(async_channel::TryRecvError::Empty) => return Poll::Pending,
+                                Err(async_channel::TryRecvError::Closed) => {
+                                    return Poll::Ready(Some((
+                                        Err("Link test cancelled".into()),
+                                        stamps.clone(),
+                                    )));
+                                }
+                            }
                         }
                     }
-                    cx.notify();
+                    // The same engine and immutable expansion policy are retained
+                    // while parked. Reject changed modules before executing a trace.
+                    let trace = if crate::engine_worker::unchanged(&stamps) {
+                        engine
+                            .trace(link.as_ref().unwrap(), engine_opener.as_ref())
+                            .map_err(|e| format!("The rules failed: {e:#}"))
+                    } else {
+                        Err("Config changed while expanding the link".into())
+                    };
+                    Poll::Ready(Some((trace, stamps.clone())))
                 }
-            });
-        })
-        .detach();
+            },
+        );
+        // opener is also needed by the UI; re-read its immutable choice.
+        let opener = self.opener();
+        self.task = Some(cx.spawn(async move |this, cx| {
+            if let Ok(result) = crate::engine_worker::receive(worker).await {
+                let _ = this.update(cx, |this, cx| {
+                    if !Rc::ptr_eq(&this.test.request_token, &request_token) {
+                        return;
+                    }
+                    this.test.expanding = false;
+                    if this.test.url.text != field || this.test.opener() != opener {
+                        cx.notify();
+                        return;
+                    }
+                    let (trace, stamps) = result;
+                    if crate::sync::machine() != machine {
+                        this.test.run(cx);
+                        return;
+                    }
+                    if !crate::engine_worker::unchanged(&stamps) {
+                        this.test.run(cx);
+                        return;
+                    }
+                    this.test.finish(trace, opener, started);
+                    cx.notify();
+                });
+            }
+        }));
     }
 
-    fn finish(&mut self, link: Link, opener: Option<OpenerChoice>, started: Instant) {
-        let engine_opener = opener.as_ref().map(|app| pwrroute_engine::Opener {
-            name: app.name.to_string(),
-            bundle_id: app.bundle_id.to_string(),
-            ..pwrroute_engine::Opener::default()
-        });
-        let result = self.engine().and_then(|engine| {
-            engine
-                .trace(&link, engine_opener.as_ref())
-                .map_err(|error| format!("The rules failed: {error:#}"))
-        });
+    fn finish(
+        &mut self,
+        result: Result<Trace, String>,
+        opener: Option<OpenerChoice>,
+        started: Instant,
+    ) {
         match result {
             Ok(trace) => {
                 let suggested = pwrroute_engine::suggest_rule(rules_url(&trace))
@@ -328,36 +407,6 @@ impl TestLink {
                 self.outcome = Some(Err(error));
             }
         }
-    }
-
-    /// Builds the engine when it is missing or its files changed.
-    fn engine(&mut self) -> Result<&Engine, String> {
-        if self.loaded.iter().any(|(path, at)| modified(path) != *at) {
-            self.engine = None;
-        }
-        if self.engine.is_none() {
-            let sources = Sources {
-                config: self.config.clone(),
-                rules: self.rules.clone(),
-                // As this machine routes: its destinations and sets.
-                machine: crate::sync::machine(),
-            };
-            // The OS answers the config's finicky.* calls, as it does for
-            // the router; the run's console output comes back in the trace.
-            let host = Rc::new(NativeHost::new());
-            // A config the router left out (it has not loaded) is left
-            // out here too: rules.json alone, as links route.
-            match crate::router::engine_as_routed(&sources, host, Limits::default()) {
-                Ok(engine) => {
-                    self.loaded = stamps(&engine);
-                    self.engine = Some(engine);
-                }
-                Err(error) => return Err(format!("The rules did not load: {error:#}")),
-            }
-        }
-        self.engine
-            .as_ref()
-            .ok_or_else(|| "The rules did not load.".into())
     }
 
     /// Rebuilds the view of the last run, as after folding or unfolding.
@@ -407,29 +456,35 @@ impl TestLink {
     /// in charge when there is one. A change to the saved tests alone
     /// routes nothing differently, so the run on screen stays.
     pub fn set_rules(&mut self, rules: RulesFile) {
-        if self.rules == rules {
+        let machine = crate::sync::machine();
+        let same_machine = self.machine == machine;
+        self.machine = machine;
+        if self.rules == rules && same_machine {
             return;
         }
-        let routing_unchanged = RulesFile {
-            tests: Vec::new(),
-            ..self.rules.clone()
-        } == RulesFile {
-            tests: Vec::new(),
-            ..rules.clone()
-        };
+        let routing_unchanged = same_machine
+            && RulesFile {
+                tests: Vec::new(),
+                ..self.rules.clone()
+            } == RulesFile {
+                tests: Vec::new(),
+                ..rules.clone()
+            };
         if routing_unchanged {
             self.rules = rules;
             return;
         }
         self.rules = rules;
+        self.task = None;
         self.request_token = Rc::new(());
+        self.worker.cancel(crate::engine_worker::Lane::Link);
+        self.io.cancel();
         self.expanding = false;
         // An app only the old rules named is gone from the picker.
         if self.opener >= self.openers().len() {
             self.opener = 0;
         }
         // Rebuild on the next test, and run it again when the screen opens.
-        self.engine = None;
         self.run = None;
         self.outcome = None;
     }
@@ -463,23 +518,6 @@ impl TestLink {
     pub fn has_run(&self) -> bool {
         self.outcome.is_some() || self.expanding
     }
-}
-
-/// The engine's files and when each last changed.
-fn stamps(engine: &Engine) -> Vec<(PathBuf, Option<SystemTime>)> {
-    engine
-        .dependencies()
-        .into_iter()
-        .map(|path| {
-            let at = modified(&path);
-            (path, at)
-        })
-        .collect()
-}
-
-/// When a file last changed, if it can be read.
-fn modified(path: &std::path::Path) -> Option<SystemTime> {
-    std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
 /// The step circle's colors: background, border, text.
@@ -1084,12 +1122,7 @@ pub fn pane(
         None if app.test.expanding => Some(
             card()
                 .py(px(14.0))
-                .child(paragraph(
-                    "Expanding short link…",
-                    12.0,
-                    18.0,
-                    theme::text_muted(),
-                ))
+                .child(paragraph("Testing link…", 12.0, 18.0, theme::text_muted()))
                 .into_any_element(),
         ),
         None => None,
