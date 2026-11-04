@@ -10,6 +10,12 @@ maps the modules; the PR that added it has the design note.
   nothing until `Syncer::resolve`. Whatever a pull, a push or a resolution
   replaces is backed up first (`state.rs`, the newest `KEEP_BACKUPS`).
   Never add a "newest wins" shortcut.
+- **A missing cloud copy is not a new folder.** Never re-seed an unchanged
+  base after its cloud file disappears: report a visible error and keep the
+  base. A local edit may restore it only when the manifest still names that
+  machine's base; a stale machine must first recover the last cloud version.
+  With no manifest, a machine with a base also waits for recovery. Sync never
+  propagates a deletion.
 - **Coordinate local writes.** `LocalFile` locks a persistent sibling of the
   resolved target. Observe the cloud outside the guard; hold it from the
   current local read through backup/apply, and recheck content before apply.

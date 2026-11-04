@@ -6126,6 +6126,7 @@ version = "0.17.0"
 dependencies = [
  "anyhow",
  "log",
+ "proptest",
  "serde",
  "serde_json",
  "sha2 0.10.9",

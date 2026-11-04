@@ -2233,7 +2233,7 @@ fn rail_end(
 }
 
 /// The file changed under the draft's own rule (Rule Drafts 1f): Save
-/// writes the draft over it, or the file's version can be taken instead.
+/// adds the draft beside it, or the draft can be discarded instead.
 fn conflict_banner(
     app: &PwrRoute,
     selection: Selection,
@@ -2249,8 +2249,9 @@ fn conflict_banner(
     let (line, take) = match app.store.draft_conflict()? {
         crate::rules_store::Conflict::Changed => (
             format!(
-                "{noun} {at} changed in rules.json while you were editing it. Save writes your \
-                 version over the file's."
+                "{noun} {at} changed in rules.json while you were editing it. Save adds your \
+                 draft as a separate {} and keeps the file's version.",
+                noun.to_lowercase()
             ),
             "Use the file's version",
         ),

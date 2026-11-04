@@ -107,8 +107,8 @@ struct Draft {
 /// draft's own rule (design: Rule Drafts 1f).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Conflict {
-    /// The rule is still in the file, as another version: Save writes the
-    /// draft over it.
+    /// The rule at its old place changed. Save adds the draft beside it,
+    /// preserving the file's version.
     Changed,
     /// The rule is gone from the file: Save adds the draft back as a new
     /// rule.
@@ -845,7 +845,7 @@ impl RulesStore {
 
     /// Puts a carried draft back on the file just read (design: Rule
     /// Drafts 1f): on its rule when the file still has the version it was
-    /// edited from; on the rule at its place, as [`Conflict::Changed`],
+    /// edited from; beside the rule at its place, as [`Conflict::Changed`],
     /// when that version is gone but the list is as long and the rules
     /// either side are the same; else as a new rule at its place
     /// ([`Conflict::Removed`], or no conflict for a rule never saved), so
@@ -869,17 +869,17 @@ impl RulesStore {
                     let filed = std::mem::replace(&mut list[i].value, value);
                     return (list[i].id, None, Some(filed));
                 }
-                // The same place only while the list around it is as it
-                // was: same length, same neighbors. A shifted list could put
-                // another rule there, and Save would write over it.
+                // Neighbors can classify the conflict for its message,
+                // but cannot prove this is another version of the same rule.
                 let around = |i: Option<usize>| i.and_then(|i| list.get(i)).map(|e| &e.value);
                 if list.len() == len
                     && at < len
                     && around(at.checked_sub(1)) == before.as_ref()
                     && around(Some(at + 1)) == after.as_ref()
                 {
-                    let filed = std::mem::replace(&mut list[at].value, value);
-                    return (list[at].id, Some(Conflict::Changed), Some(filed));
+                    let id = next();
+                    list.insert(at, Entry { id, value });
+                    return (id, Some(Conflict::Changed), None);
                 }
             }
             let id = next();
@@ -1496,6 +1496,8 @@ impl RulesStore {
         };
         self.status = Status::Saving;
         let file = self.written();
+        #[cfg(test)]
+        model::before_write();
         file.save(path)
             .map_err(|error| format!("Could not save rules.json: {error:#}"))?;
         // The file as written is the file as read: the store's own save is
@@ -1575,19 +1577,10 @@ impl RulesStore {
         let problems = self.draft_problems().len();
         let new = self.draft_is_new();
         match (problems, new, selection) {
-            (0, true, _) => "Not in rules.json until you save it.".into(),
-            (0, false, Selection::Rewrite(i) | Selection::Handler(i))
-                if self.draft_conflict() == Some(Conflict::Changed) =>
-            {
-                let noun = match selection {
-                    Selection::Rewrite(_) => "rewrite",
-                    Selection::Handler(_) => "rule",
-                };
-                format!(
-                    "Unsaved changes. Links route by the file's {noun} {}.",
-                    i + 1
-                )
+            (0, true, _) if self.draft_conflict() == Some(Conflict::Changed) => {
+                "Not in rules.json. Save adds this beside the file's version.".into()
             }
+            (0, true, _) => "Not in rules.json until you save it.".into(),
             (0, false, _) => match self.saved_at {
                 Some(at) => format!(
                     "Unsaved changes. Links still route by the version saved at {}.",
@@ -2644,7 +2637,7 @@ mod tests {
         assert_eq!(store.handlers()[0].patterns, ["agent.example/*"]);
 
         // The agent changes the draft's own rule: a conflict, and Save
-        // writes the draft over it.
+        // adds the draft beside it.
         let mut file = on_disk(&path);
         file.rules[2].browser = "Arc".into();
         file.save(&path).unwrap();
@@ -2653,12 +2646,13 @@ mod tests {
         assert_eq!(store.draft_conflict(), Some(Conflict::Changed));
         assert_eq!(
             store.rail_label(Selection::Handler(2)),
-            "Unsaved changes. Links route by the file's rule 3."
+            "Not in rules.json. Save adds this beside the file's version."
         );
         assert_eq!(store.written().rules[2].browser, "Arc");
         store.save_draft().unwrap();
         let file = on_disk(&path);
-        assert_eq!(file.rules.len(), 3);
+        assert_eq!(file.rules.len(), 4);
+        assert_eq!(file.rules[3].browser, "Arc", "keeps the external version");
         assert_eq!(
             (
                 file.rules[2].browser.as_str(),
@@ -2676,7 +2670,7 @@ mod tests {
         assert_eq!(store.check_disk(), Disk::Reloaded);
         assert_eq!(store.draft_conflict(), Some(Conflict::Removed));
         assert!(store.draft_is_new());
-        assert_eq!(store.written().rules.len(), 2);
+        assert_eq!(store.written().rules.len(), 3);
         store.save_draft().unwrap();
         assert_eq!(on_disk(&path).rules[2].profile, "Home");
         std::fs::remove_dir_all(dir).unwrap();
@@ -2754,3 +2748,7 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "rules_store/model.rs"]
+mod model;
