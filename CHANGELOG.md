@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.17.0 - 2026-11-03
+
+- Settings - The window opens before expensive panes finish loading, and each pane loads when selected. Loading and retry states keep navigation available; late results from an older window or settings revision are discarded. Privacy-number and machine-name drafts survive background refreshes. Short Links loads its domains without waiting for browser discovery or import review.
+- Browser discovery - Initial browser and profile reads share a background scan, and repeated Rescan requests are combined. Browser choices, first run and the tray refresh when the scan completes without reopening. Loading, failed scans and Retry preserve setup choices and explicit profile-access rechecks.
+- Rule menus - Menus open immediately while impact counts are calculated in the background from at most 100 recent full-address records. Unfinished counts are omitted when their evaluation budget is exhausted, and edits or config changes invalidate old results.
+- Rule testing - Rule previews, saved examples and tests, Test a link and Activity rule checks evaluate in the background. New edits cancel superseded work, stale results cannot replace newer choices, and short-link expansion leaves independent previews and saved tests free to finish. Save as example commands keep their click order and report when the bounded queue is full; a failed config probe requires an explicit Add anyway choice.
+- Import and setup - Config review and first-run preparation run in the background with loading, error and Retry states. Setup remains visible while preparing, and delayed summaries preserve newer rules, browser choices, copied counts and source-save errors. Existing partial-success, retry and Undo behavior remains available.
+- Settings actions - Journal clearing, export, synced-config validation and diagnostic copies run in the background. Privacy changes apply to routing only after their settings save succeeds. Adopting a synced config checks for competing source choices and newly discovered configs before publishing; if settings then fail to save, Retry saves the existing copy's source choice without copying again.
+
 ## v0.16.0 - 2026-11-03
 
 - Link routing - A slow short-link expansion or browser launch no longer holds up unrelated links and routing controls. Different browsers can open links independently, while ready launches for the same browser keep their order. A later direct link can open before an earlier short link finishes expanding; Activity and the tray still list links by when they arrived. Rule and privacy changes made during expansion apply before the link is opened.
