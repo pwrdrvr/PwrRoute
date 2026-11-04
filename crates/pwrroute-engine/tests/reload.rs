@@ -498,3 +498,10 @@ fn never_loaded_broken_rules_leave_the_config_in_charge() {
         LoadCommand::Rules(FileState::Broken), LoadCommand::Config(FileState::Good(2)), LoadCommand::Reload,
     ]).unwrap();
 }
+
+#[test]
+fn never_loaded_broken_rules_without_a_config_can_recover() {
+    exercise_load_model((FileState::Missing, FileState::Broken), &[
+        LoadCommand::Rules(FileState::Good(0)), LoadCommand::Reload,
+    ]).unwrap();
+}

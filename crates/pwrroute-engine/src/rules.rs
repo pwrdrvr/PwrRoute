@@ -1075,7 +1075,9 @@ mod tests {
     #[test]
     fn a_bare_app_extension_is_an_app_name() {
         assert_eq!(app_type("/a/.app"), "appName");
-        assert_eq!(app_type("/A/.app"), "appName");
+        for app in ["/A/.app", "/-/.app", "/0/.app"] {
+            assert_eq!(app_type(app), "appName");
+        }
     }
 
     #[test]

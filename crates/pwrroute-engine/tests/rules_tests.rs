@@ -572,6 +572,10 @@ fn candidate_catches(e: &Engine, candidate: &pwrroute_engine::Candidate, url: &s
 
 fn check_suggestions(e: &Engine, url: &str) -> proptest::test_runner::TestCaseResult {
     use proptest::prelude::*;
+    // Opaque parts can begin `//` and become an authority (mailto://^).
+    // Invalid URLs correctly have no suggestions; the matching promise is
+    // for valid links only.
+    prop_assume!(url::Url::parse(url).is_ok());
     let parsed = url::Url::parse(url).unwrap();
     let suggestion = suggest_rule(url);
     prop_assert!(!suggestion.candidates.is_empty(), "{url}");
@@ -622,11 +626,12 @@ fn caret_paths_match_finickys_serialized_href() {
 #[test]
 fn opaque_backslash_before_a_query_does_not_escape_the_wildcard() {
     check_suggestions(&engine(None, RulesFile::default()), "mailto:\\#").unwrap();
+    check_suggestions(&engine(None, RulesFile::default()), "mailto:\\?q=a").unwrap();
 }
 
 #[test]
 fn empty_username_with_a_password_matches() {
-    check_suggestions(&engine(None, RulesFile::default()), "https://:0@site.com/a").unwrap();
+    check_suggestions(&engine(None, RulesFile::default()), "https://:0@site.com/").unwrap();
 }
 
 #[test]
