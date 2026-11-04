@@ -9488,7 +9488,7 @@ Apache License 2.0 (456)
 - zeroize@1.9.1 | https://github.com/RustCrypto/utils
 - zeroize_derive@1.5.0 | https://github.com/RustCrypto/utils
 - linux-raw-sys@0.12.1 | https://github.com/sunfishcode/linux-raw-sys
-- rustix@1.1.5 | https://github.com/bytecodealliance/rustix
+- rustix@1.1.6 | https://github.com/bytecodealliance/rustix
 - ring@0.17.14 | https://github.com/briansmith/ring
 - rangemap@1.8.0 | https://github.com/jeffparsons/rangemap
 - windows-collections@0.3.2 | https://github.com/microsoft/windows-rs
@@ -9685,7 +9685,7 @@ Apache License 2.0 (456)
 - roxmltree@0.21.1 | https://github.com/RazrFalcon/roxmltree
 - rustc-demangle@0.1.28 | https://github.com/rust-lang/rustc-demangle
 - rustc-hash@1.1.0 | https://github.com/rust-lang-nursery/rustc-hash
-- rustix@1.1.5 | https://github.com/bytecodealliance/rustix
+- rustix@1.1.6 | https://github.com/bytecodealliance/rustix
 - rustls-native-certs@0.8.5 | https://github.com/rustls/rustls-native-certs
 - rustls@0.23.46 | https://github.com/rustls/rustls
 - scoped-tls@1.0.1 | https://github.com/alexcrichton/scoped-tls
@@ -11152,7 +11152,7 @@ Apache License 2.0 (Apache-2.0)
 
 Applies to:
 - linux-raw-sys@0.12.1
-- rustix@1.1.5
+- rustix@1.1.6
 
 
                                  Apache License
@@ -16204,7 +16204,7 @@ Applies to:
 - roxmltree@0.21.1
 - rustc-demangle@0.1.28
 - rustc-hash@1.1.0
-- rustix@1.1.5
+- rustix@1.1.6
 - rustls-native-certs@0.8.5
 - rustls@0.23.46
 - scoped-tls@1.0.1
