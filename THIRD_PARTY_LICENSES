@@ -9682,7 +9682,7 @@ Apache License 2.0 (456)
 - renderdoc-sys@1.1.0 | https://github.com/ebkalderon/renderdoc-rs
 - ring@0.17.14 | https://github.com/briansmith/ring
 - roxmltree@0.20.0 | https://github.com/RazrFalcon/roxmltree
-- roxmltree@0.21.1 | https://github.com/RazrFalcon/roxmltree
+- roxmltree@0.21.2 | https://github.com/RazrFalcon/roxmltree
 - rustc-demangle@0.1.28 | https://github.com/rust-lang/rustc-demangle
 - rustc-hash@1.1.0 | https://github.com/rust-lang-nursery/rustc-hash
 - rustix@1.1.6 | https://github.com/bytecodealliance/rustix
@@ -16201,7 +16201,7 @@ Applies to:
 - renderdoc-sys@1.1.0
 - ring@0.17.14
 - roxmltree@0.20.0
-- roxmltree@0.21.1
+- roxmltree@0.21.2
 - rustc-demangle@0.1.28
 - rustc-hash@1.1.0
 - rustix@1.1.6
