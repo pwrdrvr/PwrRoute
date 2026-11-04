@@ -28,6 +28,8 @@ fn check(
         private: false,
         privacy: pwrroute_engine::Privacy::Full,
     };
+    let has_flags = flags.is_some();
+    let mut expected_payload = flags.clone().unwrap_or_default();
     let (_, argv) = macos_plan(&browser, background, hand_off, flags);
     if let Some(i) = argv.iter().position(|a| a == "--args")
         && !argv[i + 1..].is_empty()
@@ -35,8 +37,18 @@ fn check(
         prop_assert!(argv[..i].iter().any(|a| a == "-n"), "{:?}", argv);
     }
     if browser.args.is_empty() {
-        prop_assert_eq!(argv.iter().filter(|a| **a == browser.url).count(), 1);
-        prop_assert_eq!(argv.last(), Some(&browser.url));
+        // Equal text may belong to separate arguments: a profile flag, the
+        // open delimiter, and the URL. The payload must preserve every flag
+        // in order, followed by exactly one URL argument.
+        expected_payload.push(browser.url.clone());
+        let payload_start = if has_flags {
+            argv.iter().position(|arg| arg == "--args").unwrap() + 1
+        } else {
+            // Without profile/config args, open receives its app selector,
+            // app name, an optional background option, then the URL.
+            2 + usize::from(background)
+        };
+        prop_assert_eq!(&argv[payload_start..], expected_payload.as_slice());
     }
     Ok(())
 }
@@ -63,6 +75,48 @@ fn config_arguments_alone_require_a_new_open_instance() {
         false,
     )
     .unwrap();
+}
+
+proptest! {
+    #[test]
+    fn url_text_can_also_appear_in_flags(
+        url in "--[a-z]{0,12}", copies in 0usize..4,
+        app_type in prop::sample::select(vec![AppType::AppName, AppType::BundleId, AppType::Path]),
+        background in any::<bool>(), hand_off in any::<bool>(),
+    ) {
+        // The open delimiter cannot be a profile flag, but it can still
+        // be the URL text when there are no profile flags to prepend.
+        let flags = if url == "--args" { Vec::new() } else { vec![url.clone(); copies] };
+        check(app_type, url, Vec::new(), Some(flags), background, hand_off)?;
+    }
+}
+
+#[test]
+fn a_flag_equal_to_the_url_is_preserved_beside_the_url() {
+    check(
+        AppType::AppName,
+        "--".into(),
+        Vec::new(),
+        Some(vec!["--".into()]),
+        false,
+        false,
+    )
+    .unwrap();
+}
+
+#[test]
+fn delimiter_text_in_the_url_is_still_a_single_payload_argument() {
+    for flags in [None, Some(Vec::new())] {
+        check(
+            AppType::AppName,
+            "--args".into(),
+            Vec::new(),
+            flags,
+            false,
+            false,
+        )
+        .unwrap();
+    }
 }
 
 // The differential needs the actual command builder, not a reimplementation
