@@ -78,20 +78,49 @@ pub const TEST_OPENER: usize = 1;
 /// 00:03 UTC). When less time than the longest offset has passed since
 /// midnight, the offsets are compressed into that window, in order.
 fn ago(now: SystemTime, secs: u64) -> SystemTime {
-    use chrono::Timelike;
     /// Longer than any offset the fixtures use.
     const SPAN: u64 = 20 * 60;
-    let since_midnight = u64::from(
-        chrono::DateTime::<chrono::Local>::from(now)
-            .time()
-            .num_seconds_from_midnight(),
-    );
+    let local_now = chrono::DateTime::<chrono::Local>::from(now);
+    let start = local_day_start(local_now);
+    let since_midnight = now
+        .duration_since(start)
+        .expect("the day began before now")
+        .as_secs();
     let secs = if since_midnight > SPAN {
         secs
     } else {
         secs * since_midnight / (SPAN + 1)
     };
     now - Duration::from_secs(secs)
+}
+
+/// The first real instant of now's local date. Midnight may repeat or not
+/// exist: a few zones start DST at 00:00, so that day begins at 01:00.
+fn local_day_start(now: chrono::DateTime<chrono::Local>) -> SystemTime {
+    use chrono::TimeZone;
+    let date = now.date_naive();
+    // Search real seconds rather than constructing local midnight:
+    // Local may normalize a nonexistent midnight using the old offset.
+    // The previous 48h brackets even a long local day.
+    let mut before = now.timestamp() - 2 * 24 * 60 * 60;
+    let mut today = now.timestamp();
+    while today - before > 1 {
+        let mid = before + (today - before) / 2;
+        let at = chrono::Local
+            .timestamp_opt(mid, 0)
+            .single()
+            .expect("valid timestamp");
+        if at.date_naive() == date {
+            today = mid;
+        } else {
+            before = mid;
+        }
+    }
+    chrono::Local
+        .timestamp_opt(today, 0)
+        .single()
+        .expect("day start exists")
+        .into()
 }
 
 /// Contrived dispatch records in the shape of option 2b's Activity rows,
@@ -969,16 +998,9 @@ mod tests {
 
     #[test]
     fn fixture_times_stay_on_today_right_after_midnight() {
-        let today = Local::now().date_naive();
-        let at = |h, m, sec| {
-            SystemTime::from(
-                Local
-                    .from_local_datetime(&today.and_hms_opt(h, m, sec).expect("a valid time"))
-                    .single()
-                    .expect("an unambiguous local time"),
-            )
-        };
-        let just_after = at(0, 0, 5);
+        let local_now = Local::now();
+        let today = local_now.date_naive();
+        let just_after = local_day_start(local_now) + Duration::from_secs(5);
         let offsets = [0, 17, 2 * 60 + 56, 9 * 60 + 28, 18 * 60 + 20];
         let times: Vec<SystemTime> = offsets.iter().map(|&s| ago(just_after, s)).collect();
         for t in &times {
@@ -989,30 +1011,116 @@ mod tests {
             "older offsets stay older"
         );
         // Well into the day the offsets are used as written.
-        let noon = at(12, 0, 0);
+        let noon = SystemTime::from(
+            Local
+                .from_local_datetime(&today.and_hms_opt(12, 0, 0).unwrap())
+                .earliest()
+                .unwrap(),
+        );
         assert_eq!(ago(noon, 17), noon - Duration::from_secs(17));
         assert_eq!(chrono::DateTime::<Local>::from(ago(noon, 17)).hour(), 11);
     }
 
-    // Local caches the process's timezone. Each zone gets a fresh test
-    // process instead of mutating TZ underneath other concurrent tests.
+    #[cfg(unix)]
+    #[test]
+    fn fixture_time_on_cairos_missing_midnight_stays_today() {
+        first_instant_regression(
+            "fixtures::tests::fixture_time_on_cairos_missing_midnight_stays_today",
+            "Africa/Cairo",
+            1776981600,
+            (2026, 4, 24),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_time_on_santiagos_missing_midnight_stays_today() {
+        first_instant_regression(
+            "fixtures::tests::fixture_time_on_santiagos_missing_midnight_stays_today",
+            "America/Santiago",
+            1788667200,
+            (2026, 9, 6),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_time_on_beiruts_missing_midnight_stays_today() {
+        first_instant_regression(
+            "fixtures::tests::fixture_time_on_beiruts_missing_midnight_stays_today",
+            "Asia/Beirut",
+            1774735200,
+            (2026, 3, 29),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fixture_time_on_havanas_missing_midnight_stays_today() {
+        first_instant_regression(
+            "fixtures::tests::fixture_time_on_havanas_missing_midnight_stays_today",
+            "America/Havana",
+            1772946000,
+            (2026, 3, 8),
+        );
+    }
+
+    #[cfg(unix)]
+    fn first_instant_regression(test: &str, zone: &str, epoch: u64, (y, m, d): (i32, u32, u32)) {
+        if std::env::var_os("PWRROUTE_FIXTURE_TZ_CHILD").is_none() {
+            in_zone(test, zone);
+            return;
+        }
+        // Shrunk cases: the day begins at 01:00, with zero elapsed
+        // seconds despite the 3600 wall-clock seconds on its face.
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(epoch);
+        let date = chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        assert_eq!(chrono::DateTime::<Local>::from(now).date_naive(), date);
+        assert_eq!(local_day_start(now.into()), now);
+        assert_eq!(ago(now, 1), now);
+        assert_eq!(
+            ago(now + Duration::from_secs(5), 1200),
+            now + Duration::from_secs(1)
+        );
+    }
+
+    // Unix Local uses TZ; Windows Local uses the OS timezone API and
+    // cannot be overridden this way. Each Unix zone gets a fresh process
+    // instead of mutating TZ underneath other concurrent tests.
+    #[cfg(unix)]
     fn in_zone(test: &str, zone: &str) {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--nocapture"])
             .env("TZ", zone)
             .env("PWRROUTE_FIXTURE_TZ_CHILD", "1")
-            .output().unwrap();
-        assert!(output.status.success(), "{zone}:\n{}\n{}",
-            String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{zone}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
+    #[cfg(unix)]
     #[test]
     fn fixture_offsets_stay_today_and_ordered_in_every_zone() {
         use proptest::prelude::*;
         if std::env::var_os("PWRROUTE_FIXTURE_TZ_CHILD").is_none() {
-            for zone in ["UTC", "America/New_York", "Asia/Tokyo", "America/Santiago",
-                "Asia/Beirut", "America/Havana", "Africa/Cairo"] {
-                in_zone("fixtures::tests::fixture_offsets_stay_today_and_ordered_in_every_zone", zone);
+            for zone in [
+                "UTC",
+                "America/New_York",
+                "Asia/Tokyo",
+                "America/Santiago",
+                "Asia/Beirut",
+                "America/Havana",
+                "Africa/Cairo",
+            ] {
+                in_zone(
+                    "fixtures::tests::fixture_offsets_stay_today_and_ordered_in_every_zone",
+                    zone,
+                );
             }
             return;
         }
@@ -1023,9 +1131,19 @@ mod tests {
             let date = first + chrono::Days::new(d);
             // Independent generator: walk local minutes to the first valid
             // one. This includes dates whose 00:00 never happened.
-            let start = (0..1440).find_map(|m| Local.from_local_datetime(
-                &date.and_hms_opt(m / 60, m % 60, 0).unwrap()).earliest()).unwrap();
-            if start.hour() != 0 { gaps.push(SystemTime::from(start)); }
+            let start = (0..1440)
+                .find_map(|m| {
+                    let wall = date.and_hms_opt(m / 60, m % 60, 0).unwrap();
+                    let candidate = Local.from_local_datetime(&wall).earliest()?;
+                    // Some Local implementations normalize missing times.
+                    // Only accept a minute that round-trips to the same wall time.
+                    let actual = chrono::DateTime::<Local>::from(SystemTime::from(candidate));
+                    (actual.naive_local() == wall).then_some(actual)
+                })
+                .unwrap();
+            if start.hour() != 0 {
+                gaps.push(SystemTime::from(start));
+            }
             starts.push(SystemTime::from(start));
         }
         let boundary = (prop::sample::select(starts), 0u64..=1200)
@@ -1043,13 +1161,17 @@ mod tests {
             failure_persistence: None,
             ..proptest::test_runner::Config::default()
         });
-        runner.run(&(now, 0u64..=1200, 0u64..=1200), |(now, a, b)| {
-            let newer = ago(now, a.min(b));
-            let older = ago(now, a.max(b));
-            prop_assert_eq!(chrono::DateTime::<Local>::from(older).date_naive(), chrono::DateTime::<Local>::from(now).date_naive());
-            prop_assert!(now >= newer && newer >= older);
-            Ok(())
-        }).unwrap();
+        runner
+            .run(&(now, 0u64..=1200, 0u64..=1200), |(now, a, b)| {
+                let newer = ago(now, a.min(b));
+                let older = ago(now, a.max(b));
+                prop_assert_eq!(
+                    chrono::DateTime::<Local>::from(older).date_naive(),
+                    chrono::DateTime::<Local>::from(now).date_naive()
+                );
+                prop_assert!(now >= newer && newer >= older);
+                Ok(())
+            })
+            .unwrap();
     }
-
 }
