@@ -1496,6 +1496,8 @@ impl RulesStore {
         };
         self.status = Status::Saving;
         let file = self.written();
+        #[cfg(test)]
+        model::before_write();
         file.save(path)
             .map_err(|error| format!("Could not save rules.json: {error:#}"))?;
         // The file as written is the file as read: the store's own save is
@@ -2754,3 +2756,7 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "rules_store/model.rs"]
+mod model;

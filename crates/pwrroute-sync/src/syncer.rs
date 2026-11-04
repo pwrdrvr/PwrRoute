@@ -1161,3 +1161,7 @@ mod revision_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/machines_model.rs"]
+mod model;
