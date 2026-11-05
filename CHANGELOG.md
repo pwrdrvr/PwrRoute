@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.18.0 - 2026-11-05
+
+- Rule suggestions - Suggested patterns now match the links they were created for when paths contain carets, empty segments, trailing backslashes or unusual scheme and authority combinations. Pattern construction follows Finicky's URL encoding and wildcard behavior, including empty usernames with passwords and custom-scheme links.
+- Finicky configs - A valid JavaScript config can route at startup even when rules.json cannot parse and has never loaded successfully. After a source has loaded, a later load failure still preserves the entire last working engine. App-path detection also agrees with Finicky for paths ending in a directory named .app.
+- Cloud Sync - Deleting the cloud rules.json no longer lets a stale machine silently restore old rules over newer edits. A missing copy reports a sync error and retains the last synced revision. An edited local copy can restore the folder only when it is based on the last published revision; otherwise restore that cloud copy from a backup or a machine that read it.
+- Rule drafts - When another writer replaces a rule in place while its draft is open, Save preserves the external rule and inserts the draft beside it. Discard keeps the external rule. The conflict banner and editor foot explain this choice instead of treating matching row positions as proof that the rule is unchanged.
+- macOS tray - Keyboard, VoiceOver and launch-time tray opens choose the menu-bar item's own display when monitors use different scales, including a Retina display paired with a standard-scale external monitor. Existing mouse placement and macOS 27 menu-bar overhang handling remain supported.
+
 ## v0.17.0 - 2026-11-03
 
 - Settings - The window opens before expensive panes finish loading, and each pane loads when selected. Loading and retry states keep navigation available; late results from an older window or settings revision are discarded. Privacy-number and machine-name drafts survive background refreshes. Short Links loads its domains without waiting for browser discovery or import review.
