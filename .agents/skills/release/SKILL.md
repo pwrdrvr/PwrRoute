@@ -72,11 +72,9 @@ reconcile it into this section without duplicating it.
 
 ## Verify and push main
 
-Verify the release metadata and run the lint and test commands below. When
-Sandboxer is available, follow the repository's
-[Sandboxer verification skill](../sandboxer-verification/SKILL.md) for heavy
-checks and notice generation: verify a committed tree in the VM, then bring
-back generated notices and verify the final commit.
+Verify the release metadata and run the lint and test commands below,
+following the root `AGENTS.md` verification guidance. After generating
+notices, verify the final commit.
 
 ```bash
 RELEASE_TAG=vX.Y.Z cargo xtask release-check
@@ -100,8 +98,6 @@ verified tree, then `git push origin main`. No PR, merge, or PR CI watch is
 part of this process. If a repository policy rejects the push, report the
 rejection and stop rather than changing policy or opening a PR automatically.
 
-Report the release commit, included changes and verification results. Stop
-the verification sandbox after checks; because this release has no PR, clean
-up this thread's sandbox explicitly when no longer needed. Continue to
+Report the release commit, included changes and verification results. Continue to
 [Publishing and recovery](references/publishing.md) to tag the exact pushed
 commit and hand off signing approval.

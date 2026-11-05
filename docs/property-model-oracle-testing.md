@@ -105,8 +105,7 @@ and a deleted cloud `rules.json` lets a stale machine revert newer edits.
   through GPUI, so it adds no crate to the lock. Dev-dependencies do not
   ship, so `THIRD_PARTY_LICENSES` does not change, but `cargo deny` still
   judges them, and Dependabot's seven-day cooldown applies to upgrades.
-  Adding it is a dependency change: run `cargo xtask lint` (in a sandbox when
-  the thread has Sandboxer; see the root `AGENTS.md`).
+  Adding it is a dependency change: run `cargo xtask lint`.
 - **Put the test where the code's tests already live.** A property over a
   private function goes in that module's `#[cfg(test)]` tests; one over a
   crate's public API goes in `crates/<crate>/tests/<area>_props.rs`.
