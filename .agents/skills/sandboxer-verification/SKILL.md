@@ -1,17 +1,21 @@
 ---
 name: sandboxer-verification
 description: >-
-  Run PwrRoute's lint chain (rustfmt, clippy, cargo-deny, cargo-about),
-  workspace tests, release build, Linux Desktop E2E and the
-  THIRD_PARTY_LICENSES regeneration in a Sandboxer cloud sandbox instead of
-  on the local machine. Use when the thread has the Sandboxer MCP
-  (create_sandbox and exec tools) and a change needs `cargo xtask lint`,
-  `cargo xtask test`, `cargo xtask e2e`, `cargo xtask licenses`, clippy or a
-  workspace build. Sandboxer is Ubuntu only: it does not verify macOS or
-  Windows behavior.
+  DORMANT reference for PwrRoute's former Sandboxer verification workflow,
+  pending a replacement provider. Preserve the procedure and helpers; do
+  not select this skill to run checks or automatically invoke Sandboxer.
+  Use the root AGENTS.md's local and CI verification guidance instead.
 ---
 
-# Verify on Sandboxer
+# Verify on Sandboxer (dormant)
+
+**Status: DORMANT pending a replacement provider.** The procedure below and
+its helpers are retained as reference, including historical measurements.
+They are not active instructions while this process is dormant; do not
+invoke the provider or create, resume, stop or delete resources from this
+procedure. Run checks locally or through existing CI jobs as described in
+the root [AGENTS.md](../../../AGENTS.md). No replacement provider has been
+selected or configured, and installed MCP connections remain unchanged.
 
 Sandboxer gives this thread an Ubuntu 24.04 x64 VM. The checks here mirror
 CI's `Typecheck`, `Test`, `Build` and `Linux Desktop E2E` jobs. Run them in
