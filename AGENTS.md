@@ -96,6 +96,11 @@ Linux checks verify Linux behavior only; macOS and Windows behavior needs
 native verification. Follow `e2e/AGENTS.md` for Desktop E2E prerequisites and
 the default-browser registration restrictions.
 
+The [Sandboxer verification process](.agents/skills/sandboxer-verification/SKILL.md)
+and its helpers are **dormant pending a replacement provider**. Preserve the
+procedure and historical results as reference; do not automatically route
+checks to it or invoke the provider while the process is dormant.
+
 ## Testing rules
 
 1. **A bug fix states the rule it broke as a property, model or oracle
