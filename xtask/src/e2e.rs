@@ -22,6 +22,7 @@ struct Options {
     /// Also run the `#[ignore]`d scenarios whose contract is not met yet.
     pending: bool,
     screenshots: bool,
+    prepare_only: bool,
     /// Passed to the test binary after `--`: a name filter, `--exact`, ….
     test_args: Vec<String>,
 }
@@ -34,6 +35,7 @@ fn parse(args: &[String]) -> Result<Options> {
             "--release" => options.release = true,
             "--pending" => options.pending = true,
             "--screenshots" => options.screenshots = true,
+            "--prepare-only" => options.prepare_only = true,
             "--" => options.test_args.extend(it.by_ref().cloned()),
             other => bail!("unknown e2e argument `{other}`"),
         }
@@ -68,6 +70,11 @@ pub(crate) fn e2e(args: &[String]) -> Result<()> {
         fs::remove_dir_all(&artifacts)?;
     }
     fs::create_dir_all(&artifacts)?;
+
+    if options.prepare_only {
+        println!("E2E app: {}", app.display());
+        return Ok(());
+    }
 
     let mut test = Command::new("cargo");
     test.args([
@@ -125,5 +132,6 @@ mod tests {
         assert!(options.pending && !options.release);
         assert_eq!(options.test_args, ["quits", "--exact"]);
         assert!(parse(&args(&["--bogus"])).is_err());
+        assert!(parse(&args(&["--prepare-only"])).unwrap().prepare_only);
     }
 }

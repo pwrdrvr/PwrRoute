@@ -5,8 +5,8 @@ const { test } = require('node:test');
 
 test('Windows build, test and packaging steps use runner temp', () => {
   const expected = {
-    'ci.yml/windows': ['Test'],
-    'ci.yml/e2e-windows': ['Desktop E2E'],
+    'ci.yml/windows': ['Test', 'Retry failed tests'],
+    'ci.yml/e2e-windows': ['Desktop E2E', 'Retry failed Desktop E2E tests'],
     'preview-build.yml/preview-windows': ['Build (unsigned)', 'Package zip', 'Install vpk', 'Pack unsigned Setup.exe and MSI'],
     'release.yml/windows-prepare': ['Build', 'Stage signing input'],
     'release.yml/windows-sign': ['Install vpk', 'Fetch the previous release for deltas', 'Pack with vpk'],

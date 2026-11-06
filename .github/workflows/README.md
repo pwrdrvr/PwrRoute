@@ -45,18 +45,36 @@ Jobs and the names the "Protect main" ruleset requires:
 | `changes` | Classify Changes | ubuntu-latest | Decides whether the PR is code-impacting. |
 | `typecheck` | **Typecheck** (required) | ubuntu-24.04 | `cargo xtask lint`: rustfmt, CI classifier tests, clippy `-D warnings`, cargo-deny, THIRD_PARTY_LICENSES. |
 | `build` | **Build** (required) | ubuntu-24.04 | `cargo build --release --locked --workspace`. |
-| `test` | **Test** (required) | ubuntu-24.04 | `cargo xtask test`. |
+| `test` | **Test** (required) | ubuntu-24.04 | Workspace test selection and doctests, with individual retries. |
 | `macos` | macOS (test + bundle) | macos-26 | Tests, then `cargo xtask bundle --app-only --require-icon-catalog` (ad hoc signed). |
 | `windows` | Windows (test) | windows-2025 | The tests, which compile every module of the app. |
-| `e2e-linux` | Linux Desktop E2E | ubuntu-24.04 | `cargo xtask e2e` under Xvfb, with Mesa's software Vulkan. |
-| `e2e-macos` | macOS Desktop E2E | macos-26 | `cargo xtask e2e`. |
-| `e2e-windows` | Windows Desktop E2E | windows-2025 | `cargo xtask e2e`. |
+| `e2e-linux` | Linux Desktop E2E | ubuntu-24.04 | Desktop tests under Xvfb, with Mesa's software Vulkan. |
+| `e2e-macos` | macOS Desktop E2E | macos-26 | Desktop tests on a hosted desktop. |
+| `e2e-windows` | Windows Desktop E2E | windows-2025 | Desktop tests on a hosted desktop. |
 | `desktop-e2e-result` | **Desktop E2E** (to require) | ubuntu-latest | Fails unless every platform's E2E job succeeded. |
+| `retry-report` | Consolidate test retry reports | ubuntu-latest | Collects all six slice reports, including missing slices. |
 
 The required check names are pinned. Renaming the `Typecheck`, `Build` or
 `Test` job leaves that check permanently pending and blocks every PR.
 `Typecheck` kept its name from the Electron scaffold; in Rust it is the lint
 chain.
+
+Each unit and Desktop E2E job runs the full selection with pinned nextest,
+then runs doctests with Cargo. CI compares nextest's executable inventory
+with `cargo test --no-run`, checks each selected test's JUnit identity and
+libtest completion, and rejects incomplete runs. Nextest runs tests in
+separate processes; the E2E jobs still run them serially. Doctests are not
+supported by nextest: a failing doctest fails the job without retry. A later
+step retries only the initially failed individual cases, up to 20 per job;
+an incomplete initial run, infrastructure failure or failed retry fails
+closed. The release workflow retains its normal Cargo test command.
+
+`ci-flake-report-<attempt>` contains `flake-report.json` with one entry for
+each unit and E2E platform, including missing, invalid and incomplete
+reports. A partial workflow rerun has its own attempt and lists slices not
+rerun as missing. Individual `retry-report-*` artifacts retain the initial
+and retry JUnit output. No consolidated report can be produced after a
+workflow cancellation.
 
 The CI macOS job validates the app bundle, icon catalog and ad hoc signature
 without creating a DMG. Previews create the complete DMG;
@@ -70,9 +88,11 @@ at a private temporary path, so equal volume names do not collide.
 ### Desktop E2E
 
 `cargo xtask e2e` builds the app, wraps it in a dev `PwrRoute.app` on macOS,
-and runs `e2e/` against it; `e2e/AGENTS.md` has the design. Each platform
-uploads `target/e2e-artifacts/` (per-test app logs, state dumps on failure,
-window-only screenshots of fixture data) for 30 days.
+and runs `e2e/` against it; CI uses its `--prepare-only` option before the
+nextest pass. `e2e/AGENTS.md` has the design. Each platform uploads
+`target/e2e-artifacts/` and `target/e2e-retry-artifacts/` (per-test app
+logs, state dumps on failure, window-only screenshots of fixture data) for
+30 days.
 
 - **Linux** runs under `xvfb-run` with `mesa-vulkan-drivers` (lavapipe),
   since wgpu finds no GPU on the runner, plus `x11-utils` and ImageMagick
