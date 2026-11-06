@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -33,6 +34,15 @@ def junit(path, outcomes):
 
 
 class RetryTest(unittest.TestCase):
+    def setUp(self):
+        # Exercise the same run-identity checks locally and on hosted CI.
+        environment = patch.dict(os.environ, {'GITHUB_RUN_ID': '1234', 'GITHUB_RUN_ATTEMPT': '2'})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def save(self, state):
+        retry.save({'run_id': '1234', 'attempt': '2', **state})
+
     def test_inventory_reports_exactly_the_selected_cases(self):
         # Enumerate every pass/fail subset; dropping or substituting any result
         # must fail even when the count is unchanged.
@@ -73,7 +83,7 @@ class RetryTest(unittest.TestCase):
 
     def test_no_failures_never_invokes_a_runner(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(retry, 'OUT', Path(tmp)):
-            retry.save({'type': 'unit', 'initial': 'complete', 'retry': 'not-run', 'failures': []})
+            self.save({'type': 'unit', 'initial': 'complete', 'retry': 'not-run', 'failures': []})
             with patch.object(retry, 'command', side_effect=AssertionError('runner invoked')):
                 retry.retry('unit')
             self.assertEqual(retry.load()['retry'], 'not-needed')
@@ -81,7 +91,7 @@ class RetryTest(unittest.TestCase):
     def test_budget_is_per_slice_and_excess_never_invokes_a_runner(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(retry, 'OUT', Path(tmp)):
             failures = [{'binary': 'a', 'name': str(i), 'retry': 'not-run'} for i in range(21)]
-            retry.save({'type': 'unit', 'initial': 'complete', 'failures': failures})
+            self.save({'type': 'unit', 'initial': 'complete', 'failures': failures})
             with patch.object(retry, 'command', side_effect=AssertionError('runner invoked')):
                 with self.assertRaises(ValueError):
                     retry.retry('unit')
@@ -91,7 +101,7 @@ class RetryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(retry, 'OUT', Path(tmp)), \
                 patch.object(retry, 'JUNIT', Path(tmp) / 'junit.xml'):
             ids = {('a', str(i)) for i in range(20)}
-            retry.save({'type': 'unit', 'initial': 'complete', 'failures': [
+            self.save({'type': 'unit', 'initial': 'complete', 'failures': [
                 {'binary': b, 'name': n, 'retry': 'not-run'} for b, n in ids]})
             def run(*args, **kwargs):
                 junit(retry.JUNIT, {identity: 'passed' for identity in ids})
@@ -103,7 +113,7 @@ class RetryTest(unittest.TestCase):
 
     def test_incomplete_initial_report_blocks_retry(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(retry, 'OUT', Path(tmp)):
-            retry.save({'type': 'unit', 'initial': 'incomplete', 'failures': []})
+            self.save({'type': 'unit', 'initial': 'incomplete', 'failures': []})
             with self.assertRaises(ValueError):
                 retry.retry('unit')
 
@@ -121,7 +131,7 @@ class RetryTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.object(retry, 'OUT', Path(tmp)), \
                 patch.object(retry, 'JUNIT', Path(tmp) / 'junit.xml'):
             for selected in ({('a', 'x'), ('a', 'y')}, set()):
-                retry.save({'type': 'unit', 'initial': 'complete', 'failures': failed})
+                self.save({'type': 'unit', 'initial': 'complete', 'failures': failed})
                 with patch.object(retry, 'list_tests', return_value=(selected, set())), \
                         patch.object(retry, 'command', side_effect=AssertionError('extra test run')):
                     with self.assertRaises(ValueError):
@@ -129,7 +139,7 @@ class RetryTest(unittest.TestCase):
                 self.assertEqual(retry.load()['retry'], 'incomplete')
 
             for outcome, code in [('failed', 100), ('passed', 0)]:
-                retry.save({'type': 'unit', 'initial': 'complete', 'failures': failed})
+                self.save({'type': 'unit', 'initial': 'complete', 'failures': failed})
                 def run(*args, **kwargs):
                     junit(retry.JUNIT, {('a', 'x'): outcome})
                     return SimpleNamespace(returncode=code)
@@ -145,13 +155,24 @@ class RetryTest(unittest.TestCase):
     def test_missing_retry_report_stays_incomplete(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(retry, 'OUT', Path(tmp)), \
                 patch.object(retry, 'JUNIT', Path(tmp) / 'missing.xml'):
-            retry.save({'type': 'unit', 'initial': 'complete',
+            self.save({'type': 'unit', 'initial': 'complete',
                         'failures': [{'binary': 'a', 'name': 'x', 'retry': 'not-run'}]})
             with patch.object(retry, 'list_tests', return_value=({('a', 'x')}, set())), \
                     patch.object(retry, 'command', return_value=SimpleNamespace(returncode=0)):
                 with self.assertRaises(OSError):
                     retry.retry('unit')
             self.assertEqual(retry.load()['retry'], 'incomplete')
+
+    def test_stale_or_missing_run_identity_never_invokes_a_runner(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(retry, 'OUT', Path(tmp)):
+            for identity in ({}, {'run_id': 'old', 'attempt': '2'},
+                             {'run_id': '1234', 'attempt': '1'},
+                             {'run_id': '1234'}, {'attempt': '2'}):
+                retry.save({'type': 'unit', 'initial': 'complete', 'failures': [], **identity})
+                with self.subTest(identity=identity), \
+                        patch.object(retry, 'command', side_effect=AssertionError('runner invoked')):
+                    with self.assertRaisesRegex(ValueError, 'another run or attempt'):
+                        retry.retry('unit')
 
 
 class ConsolidationTest(unittest.TestCase):
