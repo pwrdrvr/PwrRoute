@@ -71,6 +71,7 @@ fn lint() -> Result<()> {
         "--test",
         "scripts/ci/classify-changes.test.cjs",
         "scripts/ci/macos-workflows.test.cjs",
+        "scripts/ci/windows-workflows.test.cjs",
     ]);
     // Start's subprocess mocks require Bash and POSIX executable permissions.
     if cfg!(unix) {
