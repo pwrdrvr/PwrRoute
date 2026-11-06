@@ -172,7 +172,7 @@ pub fn answer_of(outcome: &Outcome, ready: Option<&Ready>) -> Option<Answer> {
             format!("Nothing is published on {slot} yet."),
         )),
         Outcome::NotInstalled(_) => Some(answer("Updates unavailable", not_updatable())),
-        Outcome::Failed(why) => Some(Answer {
+        Outcome::Failed(why) | Outcome::NetworkFailed(why) => Some(Answer {
             title: "Update check failed".to_owned(),
             message: format!("{}. Routing is unaffected.", why.trim_end_matches('.')),
             error: true,

@@ -291,7 +291,8 @@ fn checking_card(this: &SettingsWindow, cx: &mut Context<'_, SettingsWindow>) ->
                  A download installs when you quit, or from Restart to update.",
             )),
             [field_help(
-                "Nothing is downloaded without a newer release in the slot picked. A release \
+                "Overdue checks resume after wake; connection failures retry automatically. \
+                 Nothing is downloaded without a newer release in the slot picked. A release \
                  older than this copy installs only when you ask for it with Check now.",
             )
             .into_any_element()],

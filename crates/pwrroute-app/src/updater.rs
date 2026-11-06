@@ -54,6 +54,9 @@ use velopack::{
 use crate::github_releases;
 use crate::update_channel::{self, Release, Slot, UpdateSettings};
 
+#[path = "updater_schedule.rs"]
+mod schedule;
+
 /// The held download's record, in the data directory.
 const HELD_FILE: &str = "updates.json";
 
@@ -579,11 +582,26 @@ pub fn install(cx: &mut App) {
         }
     })
     .detach();
-    if let Some(every) = check_every(&installation()) {
+    if check_every(&installation()).is_some() && !crate::e2e::requested() {
+        let started = schedule::AwakeClock::new();
+        let mut schedule = schedule::Schedule::new(SystemTime::now(), Duration::ZERO);
         cx.spawn(async move |cx| {
             loop {
-                cx.background_executor().timer(every).await;
-                check_in_background(Trigger::Timer);
+                cx.background_executor().timer(schedule::POLL_EVERY).await;
+                if stopping().load(Ordering::Acquire) {
+                    break;
+                }
+                let state = state();
+                // Reachability is a recovery hint only, after an actual
+                // transport failure. Never prevent a regular/manual check.
+                let connected = state
+                    .last
+                    .as_ref()
+                    .filter(|last| matches!(last.outcome, Outcome::NetworkFailed(_)))
+                    .and_then(|_| pwrroute_os::network_connected());
+                if schedule.poll(SystemTime::now(), started.elapsed(), &state, connected) {
+                    check_in_background(Trigger::Timer);
+                }
             }
         })
         .detach();
@@ -851,10 +869,18 @@ fn check_and_download(check: Check) -> Outcome {
     let installed = locator.get_manifest_version().to_string();
     let slot = check.slot;
     let releases = github_releases::fetch(&locator.get_manifest_channel(), stopping());
-    update_check(check, |updater| updater.releases = Some(releases.clone()));
+    update_check(check, |updater| {
+        updater.releases = Some(
+            releases
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(|error| error.message.clone()),
+        )
+    });
     let releases = match releases {
         Ok(releases) => releases,
-        Err(error) => return Outcome::Failed(error),
+        Err(error) if error.network => return Outcome::NetworkFailed(error.message),
+        Err(error) => return Outcome::Failed(error.message),
     };
     let target = update_channel::select(&releases, slot);
     let held = load_held().filter(|held| package_exists(&locator, held));
@@ -889,7 +915,7 @@ fn check_and_download(check: Check) -> Outcome {
             }
             let target = &update.TargetFullRelease;
             if let Err(error) = download(check, &manager, &update, switch_back) {
-                return Outcome::Failed(error.to_string());
+                return failed_download(error);
             }
             let held = Held {
                 version: target.Version.clone(),
@@ -908,8 +934,49 @@ fn check_and_download(check: Check) -> Outcome {
         Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
             Outcome::UpToDate(installed)
         }
-        Err(error) => Outcome::Failed(error.to_string()),
+        Err(error) => failed_download(error),
     }
+}
+
+fn failed_download(error: velopack::Error) -> Outcome {
+    // Velopack's body reader uses std::io::Read; errors after headers
+    // arrive are Io, unlike failures from the initial HTTP request.
+    if let velopack::Error::Io(io) = &error
+        && is_transport_io_error(io)
+    {
+        return Outcome::NetworkFailed(error.to_string());
+    }
+    if let velopack::Error::Network(network) = &error
+        && let velopack::NetworkError::Http(http) = network.as_ref()
+        && github_releases::is_transport_error(http)
+    {
+        return Outcome::NetworkFailed(error.to_string());
+    }
+    Outcome::Failed(error.to_string())
+}
+
+fn is_transport_io_error(error: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+
+    // ureq wraps body timeouts in io::ErrorKind::Other. Inspect its typed
+    // cause rather than treating every Other (including disk errors) as
+    // connectivity loss.
+    error
+        .get_ref()
+        .and_then(|cause| cause.downcast_ref::<ureq::Error>())
+        .is_some_and(github_releases::is_transport_error)
+        || matches!(
+            error.kind(),
+            ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::NotConnected
+                | ErrorKind::BrokenPipe
+                | ErrorKind::TimedOut
+                | ErrorKind::UnexpectedEof
+                | ErrorKind::HostUnreachable
+                | ErrorKind::NetworkUnreachable
+                | ErrorKind::NetworkDown
+        )
 }
 
 /// Downloads `update`, keeping [`State::download`]'s percent current.
@@ -1005,6 +1072,8 @@ pub enum Outcome {
     /// An older release is downloaded; Restart to switch installs it.
     SwitchReady(String),
     Failed(String),
+    /// DNS, connection or timeout failure: retry after connectivity returns.
+    NetworkFailed(String),
 }
 
 impl fmt::Display for Outcome {
@@ -1031,7 +1100,7 @@ impl fmt::Display for Outcome {
             Self::SwitchReady(version) => {
                 write!(f, "{version} is downloaded; Restart to switch installs it")
             }
-            Self::Failed(why) => write!(f, "check failed: {why}"),
+            Self::Failed(why) | Self::NetworkFailed(why) => write!(f, "check failed: {why}"),
         }
     }
 }

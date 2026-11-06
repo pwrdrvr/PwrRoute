@@ -89,7 +89,7 @@ pub fn build(
             | Outcome::Downloaded(_)
             | Outcome::Pending(_)
             | Outcome::SwitchReady(_) => UpdateState::UpToDate,
-            Outcome::Failed(why) => {
+            Outcome::Failed(why) | Outcome::NetworkFailed(why) => {
                 UpdateState::Failed(format!("Could not check for updates: {why}.").into())
             }
         },

@@ -27,22 +27,25 @@
 //!   shows for it. On Linux both are `None` and the app draws its letter
 //!   badge.
 //!
-//! Everything that needs `unsafe` is in four modules: `macos::launch_services`
+//! OS calls that need `unsafe` live in `macos::launch_services`
 //! (the LaunchServices calls), `macos::app_icon` (two AppKit calls),
 //! `macos::window_order` (the window server's list) and `win::app_icon`
-//! (the Shell's icon and GDI's pixels).
+//! (the Shell's icon and GDI's pixels), `win::awake_time` (the unbiased
+//! interrupt clock) and `accessibility` (native preference queries).
 
 pub mod accessibility;
 mod args;
 mod icon_pixels;
 #[cfg(target_os = "macos")]
 mod macos;
+mod network;
 mod paths;
 mod registration;
 #[cfg(windows)]
 mod win;
 
 pub use args::links_from_args;
+pub use network::network_connected;
 pub use paths::{data_dir, log_dir, router_dir};
 pub use registration::{
     BUNDLE_ID, DESKTOP_ID, DefaultRequest, DefaultStatus, PROG_ID, REGISTERED_NAME,
@@ -98,6 +101,21 @@ pub fn system_uptime() -> Option<std::time::Duration> {
     #[cfg(not(target_os = "macos"))]
     {
         None
+    }
+}
+
+/// Suspend-excluding monotonic time for scheduling. macOS uses system
+/// uptime; Windows uses its unbiased interrupt clock, since Instant/QPC
+/// advances during sleep there. Linux returns `None`: its Instant clock
+/// already excludes suspend, so callers can use elapsed Instant time.
+pub fn system_awake_time() -> Option<std::time::Duration> {
+    #[cfg(windows)]
+    {
+        Some(win::awake_time())
+    }
+    #[cfg(not(windows))]
+    {
+        system_uptime()
     }
 }
 

@@ -2,6 +2,97 @@ use super::*;
 use proptest::prelude::*;
 use std::{cell::Cell, sync::mpsc};
 
+// Oracle: use Velopack's actual HttpSource, with a loopback server which
+// closes the package body before the advertised Content-Length. The
+// library, rather than this test, decides the resulting error shape.
+fn interrupted_package_body(sent: usize, missing: usize) -> velopack::Error {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use velopack::sources::UpdateSource;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        socket.set_read_timeout(Some(GUARD)).unwrap();
+        let mut headers = Vec::new();
+        let mut byte = [0];
+        while !headers.ends_with(b"\r\n\r\n") {
+            socket.read_exact(&mut byte).unwrap();
+            headers.push(byte[0]);
+        }
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            sent + missing
+        )
+        .unwrap();
+        socket.write_all(&vec![b'x'; sent]).unwrap();
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let asset = VelopackAsset {
+        FileName: "fixture-full.nupkg".into(),
+        ..VelopackAsset::default()
+    };
+    let result = HttpSource::new(format!("http://{address}/")).download_release_entry(
+        &asset,
+        &dir.path().join("package.nupkg"),
+        None,
+    );
+    server.join().unwrap();
+    result.unwrap_err()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(16))]
+    #[test]
+    fn review_interrupted_package_bodies_arm_transport_recovery(sent in 0usize..2048, missing in 1usize..2048) {
+        let error = interrupted_package_body(sent, missing);
+        prop_assert!(matches!(error, velopack::Error::Io(_)), "Velopack error: {error:?}");
+        prop_assert!(matches!(failed_download(error), Outcome::NetworkFailed(_)));
+    }
+
+    #[test]
+    fn review_filesystem_failures_do_not_arm_transport_recovery(kind in prop::sample::select(vec![
+        std::io::ErrorKind::PermissionDenied,
+        std::io::ErrorKind::NotFound,
+        std::io::ErrorKind::AlreadyExists,
+        std::io::ErrorKind::WriteZero,
+        std::io::ErrorKind::StorageFull,
+        std::io::ErrorKind::ReadOnlyFilesystem,
+    ])) {
+        let error = velopack::Error::Io(std::io::Error::from(kind));
+        prop_assert!(matches!(failed_download(error), Outcome::Failed(_)));
+    }
+}
+
+#[test]
+fn a_package_body_missing_one_byte_is_a_transport_failure() {
+    assert!(matches!(
+        failed_download(interrupted_package_body(0, 1)),
+        Outcome::NetworkFailed(_)
+    ));
+}
+
+#[test]
+fn wrapped_body_timeouts_retry_but_unrelated_io_errors_do_not() {
+    let timeout = ureq::Error::Timeout(ureq::Timeout::RecvBody).into_io();
+    assert_eq!(timeout.kind(), std::io::ErrorKind::Other);
+    assert!(matches!(
+        failed_download(velopack::Error::Io(timeout)),
+        Outcome::NetworkFailed(_)
+    ));
+    for error in [
+        std::io::Error::other("disk failure"),
+        ureq::Error::StatusCode(429).into_io(),
+    ] {
+        assert!(matches!(
+            failed_download(velopack::Error::Io(error)),
+            Outcome::Failed(_)
+        ));
+    }
+}
+
 // Only the worker thread uses the seam, so existing direct tests of the
 // Velopack path remain independent. Each fake fetch parks until the driver
 // releases its channel. Finished is sent after actual coordinator publication.

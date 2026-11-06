@@ -18,13 +18,15 @@ and Windows).
   explicit user action; the OS always gets the last word.
 - **`unsafe` lives in `src/macos/launch_services.rs`,
   `src/macos/app_icon.rs`, `src/macos/window_order.rs`,
-  `src/win/app_icon.rs` and `src/accessibility.rs` only**: the
+  `src/win/app_icon.rs`, `src/win/awake_time.rs` and
+  `src/accessibility.rs` only**: the
   LaunchServices C calls, the two AppKit calls that render an icon
   (`CGImageForProposedRect`, the PNG export), the window server's list
   (a typed cast and three CoreGraphics key constants), and on Windows
   the Shell's `IShellItemImageFactory`, COM's per-thread init, GDI's
-  `GetObjectW`/`GetDIBits` and the typed high-contrast query, each with a
-  `SAFETY` comment. objc2's other Foundation and AppKit bindings are safe;
+  `GetObjectW`/`GetDIBits`, the suspend-excluding interrupt clock and the
+  typed high-contrast query, each with a `SAFETY` comment.
+  objc2's other Foundation and AppKit bindings are safe;
   prefer them.
 - **`top_window_owner` reads the window server, not AppKit**, so it is
   current from any thread even while the app's main thread is busy (which
@@ -50,6 +52,9 @@ and Windows).
 - **`system_uptime` is `NSProcessInfo.systemUptime`**: time awake since
   boot, the clock Chromium's `TimeTicks` reads on macOS. Edge's singleton
   message carries it; the app passes it to the launcher's `with_uptime`.
+  The updater uses `system_awake_time`: this uptime on macOS,
+  `QueryUnbiasedInterruptTimePrecise` on Windows (Instant/QPC includes
+  suspend there), and the caller's elapsed Instant on Linux.
 - **App icons (`app_bundle`, `app_icon_png`) read the disk.** Callers run
   them off the UI thread and cache the result; the app's `app_icons.rs`
   does. Windows has no bundle ids or app names: `app_bundle` answers only a

@@ -9468,7 +9468,7 @@ for. Workspace crates (PwrRoute's own, MIT) are not listed.
 Dependency Summary
 ~~~~~~~~~~~~~~~~~~
 
-Apache License 2.0 (456)
+Apache License 2.0 (459)
 - xkeysym@0.2.1 | https://github.com/notgull/xkeysym
 - powerfmt@0.2.1 | https://github.com/jhpratt/powerfmt
 - deranged@0.5.9 | https://github.com/jhpratt/deranged
@@ -9601,6 +9601,7 @@ Apache License 2.0 (456)
 - const-random@0.1.18 | https://github.com/tkaitchuck/constrandom
 - core-foundation-sys@0.8.7 | https://github.com/servo/core-foundation-rs
 - core-foundation@0.10.1 | https://github.com/servo/core-foundation-rs
+- core-foundation@0.9.4 | https://github.com/servo/core-foundation-rs
 - core-graphics-types@0.2.0 | https://github.com/servo/core-foundation-rs
 - core-graphics@0.24.0 | https://github.com/servo/core-foundation-rs
 - core-text@21.0.0 | https://github.com/servo/core-foundation-rs
@@ -9703,6 +9704,8 @@ Apache License 2.0 (456)
 - string_cache@0.8.9 | https://github.com/servo/string-cache
 - svgtypes@0.16.1 | https://github.com/linebender/svgtypes
 - swash@0.2.10 | https://github.com/dfrg/swash
+- system-configuration-sys@0.6.0 | https://github.com/mullvad/system-configuration-rs
+- system-configuration@0.6.1 | https://github.com/mullvad/system-configuration-rs
 - tempfile@3.27.0 | https://github.com/Stebalien/tempfile
 - tendril@0.4.3 | https://github.com/servo/tendril
 - tray-icon@0.26.1 | https://github.com/tauri-apps/tray-icon
@@ -16120,6 +16123,7 @@ Applies to:
 - const-random@0.1.18
 - core-foundation-sys@0.8.7
 - core-foundation@0.10.1
+- core-foundation@0.9.4
 - core-graphics-types@0.2.0
 - core-graphics@0.24.0
 - core-text@21.0.0
@@ -16222,6 +16226,8 @@ Applies to:
 - string_cache@0.8.9
 - svgtypes@0.16.1
 - swash@0.2.10
+- system-configuration-sys@0.6.0
+- system-configuration@0.6.1
 - tempfile@3.27.0
 - tendril@0.4.3
 - tray-icon@0.26.1
