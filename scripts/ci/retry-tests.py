@@ -49,12 +49,18 @@ def inventory(data, filtered=False):
         raise ValueError('no test executables discovered')
     total = 0
     for binary_id, suite in suites.items():
-        if suite['status'] != 'listed' or suite['binary-id'] != binary_id:
+        if suite['binary-id'] != binary_id:
             raise ValueError('unlisted or ambiguous test executable')
         path = os.path.normcase(os.path.realpath(suite['binary-path']))
         if path in binaries:
             raise ValueError('duplicate executable')
         binaries.add(path)
+        if suite['status'] == 'skipped' and filtered and suite['testcases'] == {}:
+            # Nextest does not list cases for binaries excluded by the filter.
+            # retry() still compares the resulting selection with all failures.
+            continue
+        if suite['status'] != 'listed':
+            raise ValueError('unlisted or ambiguous test executable')
         for name, case in suite['testcases'].items():
             total += 1
             if case['kind'] != 'test':

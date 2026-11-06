@@ -126,6 +126,54 @@ class RetryTest(unittest.TestCase):
             retry.inventory(data)
         self.assertEqual(retry.inventory(data, filtered=True)[0], {('a', 'x')})
 
+    def test_filtered_inventory_accepts_only_empty_skipped_suites(self):
+        # Vary the selected binary: only its reported cases can enter the
+        # selection, and the same inventory is invalid for the first run.
+        for selected in range(4):
+            suites = {}
+            for index in range(4):
+                binary = f'binary-{index}'
+                suites[binary] = {
+                    'status': 'listed' if index == selected else 'skipped',
+                    'binary-id': binary, 'binary-path': f'/tmp/{binary}',
+                    'testcases': {'chosen': {'kind': 'test', 'ignored': False,
+                                             'filter-match': {'status': 'matches'}}}
+                    if index == selected else {},
+                }
+            data = {'test-count': 1, 'rust-suites': suites}
+            with self.subTest(selected=selected):
+                self.assertEqual(retry.inventory(data, filtered=True)[0],
+                                 {(f'binary-{selected}', 'chosen')})
+                with self.assertRaises(ValueError):
+                    retry.inventory(data)
+                skipped = next(s for s in suites.values() if s['status'] == 'skipped')
+                skipped['testcases'] = {'unexpected': {'kind': 'test'}}
+                with self.assertRaises(ValueError):
+                    retry.inventory(data, filtered=True)
+                skipped['testcases'] = {}
+                skipped['status'] = 'unknown'
+                with self.assertRaises(ValueError):
+                    retry.inventory(data, filtered=True)
+
+    def test_skipped_suite_cannot_hide_a_failed_test(self):
+        data = {'test-count': 1, 'rust-suites': {
+            'a': {'status': 'listed', 'binary-id': 'a', 'binary-path': '/tmp/a',
+                  'testcases': {'x': {'kind': 'test', 'ignored': False,
+                                      'filter-match': {'status': 'matches'}}}},
+            'b': {'status': 'skipped', 'binary-id': 'b', 'binary-path': '/tmp/b',
+                  'testcases': {}},
+        }}
+        with tempfile.TemporaryDirectory() as tmp, patch.object(retry, 'OUT', Path(tmp)):
+            self.save({'type': 'unit', 'initial': 'complete', 'failures': [
+                {'binary': 'a', 'name': 'x', 'retry': 'not-run'},
+                {'binary': 'b', 'name': 'y', 'retry': 'not-run'}]})
+            response = SimpleNamespace(returncode=0, stdout=json.dumps(data))
+            with patch.object(retry, 'command', return_value=response) as command:
+                with self.assertRaisesRegex(ValueError, 'exact failure set'):
+                    retry.retry('unit')
+            self.assertEqual(command.call_count, 1)  # discovery only
+            self.assertEqual(retry.load()['retry'], 'incomplete')
+
     def test_retry_requires_exact_selection_and_success_evidence(self):
         failed = [{'binary': 'a', 'name': 'x', 'retry': 'not-run'}]
         with tempfile.TemporaryDirectory() as tmp, patch.object(retry, 'OUT', Path(tmp)), \
