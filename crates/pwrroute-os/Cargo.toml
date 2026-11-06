@@ -21,6 +21,9 @@ dirs = "6"
 png = "0.18"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+# Local reachability after an update connection fails. Already in the lock
+# through reqwest; this does not send a probe or resolve a hostname.
+system-configuration = "0.6.1"
 objc2 = "0.6"
 # The main queue, for NSApplication's yieldActivation from the dispatch
 # thread. Already shipped (GPUI's macOS platform uses it).

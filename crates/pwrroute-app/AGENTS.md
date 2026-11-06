@@ -1001,7 +1001,13 @@ their own modules.
   which the tray's Quit also calls: `apply_pending_on_quit` hands it to
   Velopack's updater, no restart) or from Settings' Restart to update.
   `updater::install` checks again every `CHECK_EVERY` on a Velopack
-  install only. Route every new Quit through `app_menu::quit`. Which
+  install only. `updater_schedule.rs` uses wall-clock deadlines, counts
+  sleep and settles an overdue wake for 30 seconds. Transport failures
+  retry with backoff from 30 seconds to six hours; macOS local reachability
+  can bring a retry forward after 30 seconds of observed connectivity.
+  Reachability never gates a regular or manual request; HTTP/rate-limit and
+  package errors keep the ordinary cadence. E2E disables the schedule.
+  Route every new Quit through `app_menu::quit`. Which
   release is the release channel's (`update_channel.rs`, the Pwr family's
   Stable/Beta × Latest/Prerelease): keep its selection logic pure and
   tested there, the network in `github_releases.rs`, and the check's

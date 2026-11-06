@@ -37,12 +37,14 @@ mod args;
 mod icon_pixels;
 #[cfg(target_os = "macos")]
 mod macos;
+mod network;
 mod paths;
 mod registration;
 #[cfg(windows)]
 mod win;
 
 pub use args::links_from_args;
+pub use network::network_connected;
 pub use paths::{data_dir, log_dir, router_dir};
 pub use registration::{
     BUNDLE_ID, DESKTOP_ID, DefaultRequest, DefaultStatus, PROG_ID, REGISTERED_NAME,

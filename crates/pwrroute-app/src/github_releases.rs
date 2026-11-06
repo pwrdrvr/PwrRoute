@@ -15,7 +15,7 @@
 
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -59,17 +59,37 @@ struct ApiAsset {
     name: String,
 }
 
-/// The releases a copy on Velopack channel `channel` ("osx", "win") can
-/// update to: published, with `releases.<channel>.json` attached.
-pub fn fetch(channel: &str, cancelled: &AtomicBool) -> Result<Vec<Release>, String> {
+/// Transport failures may recover when connectivity returns. HTTP errors
+/// (especially rate limits) and invalid release data keep the normal cadence.
+#[derive(Debug)]
+pub struct FetchError {
+    pub message: String,
+    pub network: bool,
+}
+
+/// Published releases with the installed platform's Velopack feed.
+pub fn fetch(channel: &str, cancelled: &AtomicBool) -> Result<Vec<Release>, FetchError> {
     let started = Instant::now();
     let agent = agent();
+    let network_errors = Mutex::new(Vec::new());
     fetch_with(
         channel,
         cancelled,
-        &|request, timeout| get(&agent, &request.url(), timeout),
+        &|request, timeout| {
+            get_for_update(&agent, &request.url(), timeout).map_err(|error| {
+                if error.network {
+                    network_errors.lock().unwrap().push(error.message.clone());
+                }
+                error.message
+            })
+        },
         &|| started.elapsed(),
     )
+    .map_err(|message| FetchError {
+        network: !cancelled.load(Ordering::Acquire)
+            && (network_errors.lock().unwrap().contains(&message) || started.elapsed() >= TIMEOUT),
+        message,
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -187,7 +207,11 @@ fn latest_tag(body: Option<String>) -> Result<Option<String>, String> {
 }
 
 /// The body of a GET; `None` for a 404.
-fn get(agent: &Agent, url: &str, timeout: Duration) -> Result<Option<String>, String> {
+fn get_for_update(
+    agent: &Agent,
+    url: &str,
+    timeout: Duration,
+) -> Result<Option<String>, FetchError> {
     let mut response = agent
         .get(url)
         .header("Accept", "application/vnd.github+json")
@@ -196,19 +220,39 @@ fn get(agent: &Agent, url: &str, timeout: Duration) -> Result<Option<String>, St
         .timeout_global(Some(timeout))
         .build()
         .call()
-        .map_err(|error| format!("could not reach GitHub ({error})"))?;
+        .map_err(|error| FetchError {
+            message: format!("could not reach GitHub ({error})"),
+            network: is_transport_error(&error),
+        })?;
     match response.status().as_u16() {
         200 => response
             .body_mut()
             .read_to_string()
             .map(Some)
-            .map_err(|error| format!("could not read GitHub's answer ({error})")),
+            .map_err(|error| FetchError {
+                message: format!("could not read GitHub's answer ({error})"),
+                network: is_transport_error(&error),
+            }),
         404 => Ok(None),
-        403 | 429 => {
-            Err("GitHub's hourly limit for this network is used up; try again later".into())
-        }
-        status => Err(format!("GitHub answered {status}")),
+        403 | 429 => Err(FetchError {
+            message: "GitHub's hourly limit for this network is used up; try again later".into(),
+            network: false,
+        }),
+        status => Err(FetchError {
+            message: format!("GitHub answered {status}"),
+            network: false,
+        }),
     }
+}
+
+pub fn is_transport_error(error: &ureq::Error) -> bool {
+    matches!(
+        error,
+        ureq::Error::Io(_)
+            | ureq::Error::Timeout(_)
+            | ureq::Error::HostNotFound
+            | ureq::Error::ConnectionFailed
+    )
 }
 
 fn agent() -> Agent {
@@ -612,8 +656,13 @@ mod tests {
                 )
                 .unwrap();
             });
-            let result = get(&agent(), &format!("http://{address}/releases"), GUARD);
+            let result = get_for_update(&agent(), &format!("http://{address}/releases"), GUARD);
             server.join().unwrap();
+            // HTTP responses must not arm connectivity recovery retries.
+            if let Err(error) = &result {
+                assert!(!error.network);
+            }
+            let result = result.map_err(|error| error.message);
             match status {
                 200 => assert_eq!(result.unwrap(), Some("[]".into())),
                 404 => assert_eq!(result.unwrap(), None),

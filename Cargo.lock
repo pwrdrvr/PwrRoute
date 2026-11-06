@@ -6103,6 +6103,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "png 0.18.1",
  "pwrroute-router",
+ "system-configuration",
  "windows 0.62.2",
  "windows-registry 0.6.1",
  "windows-sys 0.61.2",
