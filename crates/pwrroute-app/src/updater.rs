@@ -583,7 +583,7 @@ pub fn install(cx: &mut App) {
     })
     .detach();
     if check_every(&installation()).is_some() && !crate::e2e::requested() {
-        let started = std::time::Instant::now();
+        let started = schedule::AwakeClock::new();
         let mut schedule = schedule::Schedule::new(SystemTime::now(), Duration::ZERO);
         cx.spawn(async move |cx| {
             loop {
@@ -939,6 +939,13 @@ fn check_and_download(check: Check) -> Outcome {
 }
 
 fn failed_download(error: velopack::Error) -> Outcome {
+    // Velopack's body reader uses std::io::Read; errors after headers
+    // arrive are Io, unlike failures from the initial HTTP request.
+    if let velopack::Error::Io(io) = &error
+        && is_transport_io_error(io)
+    {
+        return Outcome::NetworkFailed(error.to_string());
+    }
     if let velopack::Error::Network(network) = &error
         && let velopack::NetworkError::Http(http) = network.as_ref()
         && github_releases::is_transport_error(http)
@@ -946,6 +953,30 @@ fn failed_download(error: velopack::Error) -> Outcome {
         return Outcome::NetworkFailed(error.to_string());
     }
     Outcome::Failed(error.to_string())
+}
+
+fn is_transport_io_error(error: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+
+    // ureq wraps body timeouts in io::ErrorKind::Other. Inspect its typed
+    // cause rather than treating every Other (including disk errors) as
+    // connectivity loss.
+    error
+        .get_ref()
+        .and_then(|cause| cause.downcast_ref::<ureq::Error>())
+        .is_some_and(github_releases::is_transport_error)
+        || matches!(
+            error.kind(),
+            ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::NotConnected
+                | ErrorKind::BrokenPipe
+                | ErrorKind::TimedOut
+                | ErrorKind::UnexpectedEof
+                | ErrorKind::HostUnreachable
+                | ErrorKind::NetworkUnreachable
+                | ErrorKind::NetworkDown
+        )
 }
 
 /// Downloads `update`, keeping [`State::download`]'s percent current.

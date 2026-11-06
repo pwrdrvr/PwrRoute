@@ -95,6 +95,8 @@ windows = { version = "0.62", default-features = false, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    # Suspend-excluding scheduler time; Instant/QPC includes sleep on Windows.
+    "Win32_System_WindowsProgramming",
     "Win32_UI_Shell",
 ] }
 

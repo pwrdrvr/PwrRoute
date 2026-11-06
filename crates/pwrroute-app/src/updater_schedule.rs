@@ -1,7 +1,34 @@
 //! Wall-clock release deadlines, with awake time for connectivity settling.
 
 use super::{CHECK_EVERY, LastCheck, Outcome, State};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
+
+/// Samples the platform clock separately from the wall-clock deadline.
+pub(super) struct AwakeClock {
+    started: Instant,
+    native_start: Option<Duration>,
+}
+
+impl AwakeClock {
+    pub(super) fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            native_start: pwrroute_os::system_awake_time(),
+        }
+    }
+
+    pub(super) fn elapsed(&self) -> Duration {
+        let native = self
+            .native_start
+            .zip(pwrroute_os::system_awake_time())
+            .map(|(start, now)| now.saturating_sub(start));
+        elapsed_from(self.started.elapsed(), native)
+    }
+}
+
+fn elapsed_from(instant: Duration, suspend_excluding: Option<Duration>) -> Duration {
+    suspend_excluding.unwrap_or(instant)
+}
 
 pub(super) const POLL_EVERY: Duration = Duration::from_secs(10);
 const SETTLE_FOR: Duration = Duration::from_secs(30);
@@ -143,6 +170,37 @@ mod tests {
 
     proptest! {
         #[test]
+        fn review_windows_clock_excludes_sleep_from_wake_settling(sleep in 21601u64..604800) {
+            let mut schedule = Schedule::new(wall(0), Duration::ZERO);
+            let state = State::default();
+            // Windows' Instant advances during suspend; its unbiased
+            // interrupt count advances only for the ten seconds awake.
+            let resumed = elapsed_from(Duration::from_secs(sleep + 10), Some(Duration::from_secs(10)));
+            prop_assert!(!schedule.poll(wall(sleep + 10), resumed, &state, None));
+            let settled = elapsed_from(Duration::from_secs(sleep + 40), Some(Duration::from_secs(40)));
+            prop_assert!(schedule.poll(wall(sleep + 40), settled, &state, None));
+        }
+
+        #[test]
+        fn a_short_windows_sleep_brings_a_backed_off_retry_forward(sleep in 6u64..80) {
+            let mut schedule = Schedule::new(wall(0), Duration::ZERO);
+            // Three failed attempts: the fourth has a two-minute backoff.
+            for (at, delay) in [(0, 30), (31, 60)] {
+                let state = offline(at);
+                prop_assert!(!schedule.poll(wall(at), Duration::from_secs(at), &state, None));
+                prop_assert!(schedule.poll(wall(at + delay), Duration::from_secs(at + delay), &state, None));
+            }
+            let state = offline(92);
+            prop_assert!(!schedule.poll(wall(92), Duration::from_secs(92), &state, None));
+            let resumed_wall = 93 + sleep;
+            let resumed = elapsed_from(Duration::from_secs(resumed_wall), Some(Duration::from_secs(93)));
+            prop_assert!(!schedule.poll(wall(resumed_wall), resumed, &state, None));
+            let settled = elapsed_from(Duration::from_secs(resumed_wall + 30), Some(Duration::from_secs(123)));
+            // This is still earlier than the ordinary backoff deadline (212).
+            prop_assert!(schedule.poll(wall(resumed_wall + 30), settled, &state, None));
+        }
+
+        #[test]
         fn sleep_counts_toward_the_release_check_deadline(sleep in 21601u64..604800) {
             let mut schedule = Schedule::new(wall(0), Duration::ZERO);
             let state = State::default();
@@ -185,6 +243,16 @@ mod tests {
             prop_assert!(!schedule.poll(wall(up + 29), Duration::from_secs(up + 29), &state, Some(true)));
             prop_assert!(schedule.poll(wall(up + 30), Duration::from_secs(up + 30), &state, Some(true)));
         }
+    }
+
+    #[test]
+    fn windows_wake_waits_thirty_awake_seconds_even_after_six_hours_suspended() {
+        let mut schedule = Schedule::new(wall(0), Duration::ZERO);
+        let state = State::default();
+        let resumed = elapsed_from(Duration::from_secs(21611), Some(Duration::from_secs(10)));
+        assert!(!schedule.poll(wall(21611), resumed, &state, None));
+        let settled = elapsed_from(Duration::from_secs(21641), Some(Duration::from_secs(40)));
+        assert!(schedule.poll(wall(21641), settled, &state, None));
     }
 
     #[test]

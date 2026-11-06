@@ -1003,7 +1003,11 @@ their own modules.
   `updater::install` checks again every `CHECK_EVERY` on a Velopack
   install only. `updater_schedule.rs` uses wall-clock deadlines, counts
   sleep and settles an overdue wake for 30 seconds. Transport failures
-  retry with backoff from 30 seconds to six hours; macOS local reachability
+  include interrupted HTTP package-body reads, but not filesystem errors.
+  The scheduler's `AwakeClock` uses `system_awake_time` (Windows' unbiased
+  interrupt clock, macOS uptime), with elapsed Instant time on Linux.
+  Transport failures retry with backoff from 30 seconds to six hours;
+  macOS local reachability
   can bring a retry forward after 30 seconds of observed connectivity.
   Reachability never gates a regular or manual request; HTTP/rate-limit and
   package errors keep the ordinary cadence. E2E disables the schedule.
