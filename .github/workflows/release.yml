@@ -476,6 +476,9 @@ jobs:
           save-if: false
 
       - name: Build
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: cargo build --release --locked -p pwrroute-app
 
       # `app/` becomes vpk's packDir: what installs under
@@ -484,6 +487,8 @@ jobs:
         shell: pwsh
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
           $stage = Join-Path $env:RUNNER_TEMP "windows-release-input"
           New-Item -ItemType Directory -Force "$stage/app" | Out-Null
@@ -559,6 +564,9 @@ jobs:
       # From the signing input: pinned version, SHA-512-verified package.
       - name: Install vpk
         shell: bash
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: input/install-vpk.sh
 
       - name: Detect Azure signing configuration
@@ -603,6 +611,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
           if ! vpk --skip-updates download github --repoUrl "https://github.com/$GITHUB_REPOSITORY" \
               --token "$GH_TOKEN" --pre --channel win --outputDir releases; then
@@ -616,6 +626,8 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           SIGNED: ${{ steps.creds.outputs.signed }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}

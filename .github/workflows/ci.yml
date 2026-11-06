@@ -369,6 +369,9 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Test
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: cargo xtask test
 
 
@@ -525,6 +528,9 @@ jobs:
           cache-on-failure: true
 
       - name: Desktop E2E
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: cargo xtask e2e
 
       - name: Upload Desktop E2E artifacts

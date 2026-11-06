@@ -127,12 +127,17 @@ jobs:
           echo "Preview version: ${preview}"
 
       - name: Build (unsigned)
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: cargo build --release --locked -p pwrroute-app
 
       - name: Package zip
         shell: pwsh
         env:
           PREVIEW_VERSION: ${{ steps.version.outputs.version }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
           $name = "PwrRoute-$env:PREVIEW_VERSION-windows-x64"
           New-Item -ItemType Directory -Force "dist/$name" | Out-Null
@@ -146,6 +151,9 @@ jobs:
 
       - name: Install vpk
         shell: bash
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: scripts/release/install-vpk.sh
 
       # The script release.yml's windows-sign job runs, minus signing,
@@ -154,6 +162,8 @@ jobs:
         shell: pwsh
         env:
           PREVIEW_VERSION: ${{ steps.version.outputs.version }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
           New-Item -ItemType Directory -Force vpk-input | Out-Null
           Copy-Item target/release/pwrroute.exe, README.md, LICENSE, THIRD_PARTY_LICENSES vpk-input/
