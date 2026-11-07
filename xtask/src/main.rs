@@ -87,6 +87,19 @@ fn lint() -> Result<()> {
                 "unittest",
                 "discover",
                 "-s",
+                "scripts/ci",
+                "-p",
+                "*_test.py",
+            ])
+            .current_dir(root()))
+        .context("Python 3 is required to test CI retry reporting")?;
+        run(Command::new("python3")
+            .args([
+                "-B",
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
                 "scripts/release",
                 "-p",
                 "*_test.py",
