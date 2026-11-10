@@ -86,7 +86,7 @@ jobs:
           save-if: false
 
       - name: Install cargo-deny and cargo-about
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-deny,cargo-about
 
@@ -272,7 +272,7 @@ jobs:
       - name: Install .NET for vpk
         env:
           DOTNET_INSTALL_DIR: ${{ env.PWRROUTE_SIGNING_TEMP_DIR }}/dotnet
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: 8.0.x
 
@@ -557,7 +557,7 @@ jobs:
 
       # vpk runs on .NET; so does the Azure Artifact Signing dlib it ships.
       - name: Install .NET for vpk
-        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: 8.0.x
 
