@@ -23,6 +23,13 @@ updates:
         patterns:
           - "rquickjs*"
           - "oxc*"
+      # Group remaining routine upgrades after the specialized groups above.
+      cargo-routine:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
     ignore:
       # gpui-kit is pinned with `=`; it is upgraded on purpose, with a look at
       # the window, not by a bot.
@@ -37,3 +44,10 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    groups:
+      actions-routine:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
