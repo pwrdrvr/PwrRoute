@@ -10182,7 +10182,7 @@ BSD 3-Clause &quot;New&quot; or &quot;Revised&quot; License (10)
 - encoding_rs@0.8.42 | https://github.com/hsivonen/encoding_rs
 
 BSD Zero Clause License (4)
-- interprocess@2.4.6 | https://github.com/kotauskas/interprocess
+- interprocess@2.4.7 | https://github.com/kotauskas/interprocess
 - recvmsg@1.0.0
 - doctest-file@1.1.1 | https://codeberg.org/Goat7658/doctest-file
 - adler2@2.0.1 | https://github.com/oyvindln/adler2
@@ -10215,7 +10215,7 @@ BSD Zero Clause License (0BSD)
 -----------------------------------------------------------
 
 Applies to:
-- interprocess@2.4.6
+- interprocess@2.4.7
 
 BSD Zero Clause License
 
