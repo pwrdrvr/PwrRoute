@@ -9855,7 +9855,7 @@ Apache License 2.0 (459)
 - proc-macro2@1.0.107 | https://github.com/dtolnay/proc-macro2
 - profiling-procmacros@1.0.18 | https://github.com/aclysma/profiling
 - profiling@1.0.18 | https://github.com/aclysma/profiling
-- psl@2.1.245 | https://github.com/addr-rs/psl
+- psl@2.1.246 | https://github.com/addr-rs/psl
 - quote@1.0.47 | https://github.com/dtolnay/quote
 - rand@0.10.3 | https://github.com/rust-random/rand
 - rand@0.9.5 | https://github.com/rust-random/rand
@@ -20127,7 +20127,7 @@ Applies to:
 - proc-macro2@1.0.107
 - profiling-procmacros@1.0.18
 - profiling@1.0.18
-- psl@2.1.245
+- psl@2.1.246
 - quote@1.0.47
 - rand@0.10.3
 - rand@0.9.5
