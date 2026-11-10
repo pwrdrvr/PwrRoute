@@ -9643,7 +9643,7 @@ Apache License 2.0 (459)
 - lazy_static@1.5.1 | https://github.com/rust-lang-nursery/lazy-static.rs
 - linux-raw-sys@0.12.1 | https://github.com/sunfishcode/linux-raw-sys
 - lock_api@0.4.14 | https://github.com/Amanieu/parking_lot
-- log@0.4.34 | https://github.com/rust-lang/log
+- log@0.4.35 | https://github.com/rust-lang/log
 - markup5ever@0.12.1 | https://github.com/servo/html5ever
 - markup5ever_rcdom@0.3.0 | https://github.com/servo/html5ever
 - metal@0.33.0 | https://github.com/gfx-rs/metal-rs
@@ -16165,7 +16165,7 @@ Applies to:
 - lazy_static@1.5.1
 - linux-raw-sys@0.12.1
 - lock_api@0.4.14
-- log@0.4.34
+- log@0.4.35
 - markup5ever@0.12.1
 - markup5ever_rcdom@0.3.0
 - metal@0.33.0
