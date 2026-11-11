@@ -6,7 +6,7 @@ step runs a `cargo xtask` task, so CI and a local run do the same thing.
 
 | Workflow | Trigger | What it does |
 |---|---|---|
-| `ci.yml` | push to `main`, PRs | Typecheck (the whole `cargo xtask lint` chain), Build and Test on Linux; a macOS job that tests and bundles the app; a Windows job that runs the tests; Desktop E2E on Linux, macOS and Windows. Non-code-only PRs skip everything after Classify Changes (see below). |
+| `ci.yml` | push to `main`, PRs | Typecheck (the whole `cargo xtask lint` chain), Build and Test on Linux; a macOS job that tests the app and, when a packaging input changes, bundles it; a Windows job that runs the tests; Desktop E2E on Linux, macOS and Windows. Non-code-only PRs skip everything after Classify Changes (see below). |
 | `preview-build.yml` | `build-preview` PR label, manual dispatch | An ad hoc signed macOS universal DMG and zip (macOS 26) and an unsigned Windows x64 zip, Velopack Setup.exe and MSI, uploaded as workflow artifacts. |
 | `release.yml` | `v*` tag push, manual dispatch with a tag | Checks release metadata, lints and tests, builds macOS universal and Windows x64 in unprivileged jobs, packs and signs them with Velopack in credentialed jobs that never check out source, packages Linux x64 + arm64, then creates a GitHub Pre-release from the matching `CHANGELOG.md` section with every platform's assets and the Velopack update feeds. Signing and notarization run only when their credentials are configured (see below). |
 
@@ -46,7 +46,7 @@ Jobs and the names the "Protect main" ruleset requires:
 | `typecheck` | **Typecheck** (required) | ubuntu-24.04 | `cargo xtask lint`: rustfmt, CI classifier tests, clippy `-D warnings`, cargo-deny, THIRD_PARTY_LICENSES. |
 | `build` | **Build** (required) | ubuntu-24.04 | `cargo build --release --locked --workspace`. |
 | `test` | **Test** (required) | ubuntu-24.04 | Workspace test selection and doctests, with individual retries. |
-| `macos` | macOS (test + bundle) | macos-26 | Tests, then `cargo xtask bundle --app-only --require-icon-catalog` (ad hoc signed). |
+| `macos` | macOS (test + bundle) | macos-26 | Tests, then, when a packaging input changes, `cargo xtask bundle --app-only --require-icon-catalog` (ad hoc signed). |
 | `windows` | Windows (test) | windows-2025 | The tests, which compile every module of the app. |
 | `e2e-linux` | Linux Desktop E2E | ubuntu-24.04 | Desktop tests under Xvfb, with Mesa's software Vulkan. |
 | `e2e-macos` | macOS Desktop E2E | macos-26 | Desktop tests on a hosted desktop. |
@@ -77,7 +77,8 @@ and retry JUnit output. No consolidated report can be produced after a
 workflow cancellation.
 
 The CI macOS job validates the app bundle, icon catalog and ad hoc signature
-without creating a DMG. Previews create the complete DMG;
+without creating a DMG, when a packaging input changes (see "The macOS
+bundle check" below). Previews create the complete DMG;
 release signing creates it after packing. `dmg-layout.py` follows
 PwrSuiteLab's direct `.DS_Store` writer:
 the background, 660×400 window, 112-point icons, app/Applications positions and
@@ -144,7 +145,7 @@ workflow change to that PR selects full CI. Unknown paths also run full CI.
 A rename qualifies only if both paths qualify; missing rename metadata runs
 full CI.
 
-Push events always run full CI. API errors, empty or incomplete pagination
+Push events always run every job. API errors, empty or incomplete pagination
 (including GitHub's 3,000-file limit), invalid counts, malformed file entries
 and duplicate results also run full CI. A script failure or missing output
 cannot opt out: the job output defaults to full CI unless the classifier
@@ -162,6 +163,45 @@ actual inline classifier and job conditions, without GitHub credentials or
 npm dependencies. `cargo xtask lint` includes this check and macOS
 workflow/cleanup regression tests; Node.js 22 or newer must be on `PATH`
 (the GitHub runners already provide it).
+
+### The macOS bundle check
+
+The `Bundle` step of the `macos` job, and the Xcode selection before it,
+run only when a packaging input changes. Those inputs are `packaging/**`,
+`scripts/release/**`, `xtask/**`, `Cargo.lock`, any `Cargo.toml`,
+`rust-toolchain.toml`, `.cargo/**`, `ci.yml` and the
+`select-xcode-for-actool` action: what the bundle is built from, and the
+dependency, toolchain and CI changes a release-profile or packaging break
+comes from. A rename counts if either path is an input. Every other job
+still runs on every code change, so the PR keeps Linux, macOS and Windows
+tests, and Linux's `Build` job keeps a release-profile build of the
+workspace.
+
+In the 33 PR runs and 20 `main` pushes from November 4 to 11, 2026, the
+macOS job set the wall time of nearly every run, and its bundle step ran
+serially after the tests. In the 13 PR runs not from Dependabot it took a
+median 5.6 minutes, and without it their median wall time would drop from
+14.1 to about 9 minutes; on `main` it took 5.5, and wall time would drop
+from 15.2 to about 11.5. Dependabot's Cargo and Actions PRs change
+`Cargo.lock` or `ci.yml`, so they still bundle.
+
+The same rule applies to pushes to `main`. The classifier compares the
+push's `before` and `after` commits, so a merge that changes no packaging
+input does not bundle again. A push it cannot read as a complete
+fast-forward (a new branch, a force push, a compare failure, or 300 files
+or more) bundles. Main pushes are grouped by SHA, so a queued push is
+never replaced and its range never skipped; a `main` run cancelled by hand
+does drop its range, and the next release or `build-preview` build still
+packages it.
+
+To run everything on a PR anyway, add the `full-ci` label, then push or use
+**Re-run all jobs**. The classifier reads labels live, so a full re-run sees
+it. **Re-run failed jobs** does not: it keeps the classifier's earlier
+answer and leaves the bundle skipped. A failed label lookup, like any other
+classifier failure, runs everything.
+
+Releases and `build-preview` builds still build and package the universal
+app on every run.
 
 ## preview-build.yml
 
@@ -392,6 +432,7 @@ Keep label names namespaced when they start, skip, or narrow CI work.
 | Label | Workflow | Effect |
 |---|---|---|
 | `build-preview` | `preview-build.yml` | Builds the macOS DMG and the Windows zip, Setup.exe and MSI for the PR. Applied label triggers a run; later pushes to a labeled PR re-run it. |
+| `full-ci` | `ci.yml` | Runs every CI job and step, including the macOS bundle check, whatever changed. Does not start a run: push, or use **Re-run all jobs** (not Re-run failed jobs). |
 
 If you add another label-influenced workflow path, document it here in the
 same change as the workflow update.

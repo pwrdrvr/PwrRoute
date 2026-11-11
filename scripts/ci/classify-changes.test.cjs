@@ -9,8 +9,12 @@ const script = workflow.match(/          script: \|\n((?:            .*\n|\n)+)/
 assert.ok(script, 'the classifier must remain covered by these tests');
 const classify = new (async function () {}).constructor('github', 'context', 'core', script);
 
+const sha = (c) => c.repeat(40);
+
 async function run({ paths, files = paths?.map(filename => ({ filename, status: 'modified' })),
-  count = files?.length, event = 'pull_request', apiError = false, summaryError = false }) {
+  count = files?.length, event = 'pull_request', apiError = false, summaryError = false,
+  labels = [], labelError = false, before = sha('a'), after = sha('b'),
+  compare = { status: 'ahead', files }, compareError = false }) {
   const outputs = {};
   const calls = [];
   const summary = {
@@ -20,7 +24,23 @@ async function run({ paths, files = paths?.map(filename => ({ filename, status: 
     async write() { if (summaryError) throw new Error('summary unavailable'); },
   };
   await classify({
-    rest: { pulls: { listFiles: 'pulls.listFiles' } },
+    rest: {
+      pulls: {
+        listFiles: 'pulls.listFiles',
+        async get(args) {
+          calls.push({ method: 'pulls.get', args });
+          if (labelError) throw new Error('labels unavailable');
+          return { data: { labels: labels.map(name => ({ name })) } };
+        },
+      },
+      repos: {
+        async compareCommitsWithBasehead(args) {
+          calls.push({ method: 'repos.compareCommitsWithBasehead', args });
+          if (compareError) throw new Error('compare unavailable');
+          return { data: compare };
+        },
+      },
+    },
     async paginate(method, args) {
       calls.push({ method, args });
       if (apiError) throw new Error('API unavailable');
@@ -30,7 +50,7 @@ async function run({ paths, files = paths?.map(filename => ({ filename, status: 
     eventName: event,
     repo: { owner: 'pwrdrvr', repo: 'PwrRoute' },
     issue: { number: 93 },
-    payload: { pull_request: { changed_files: count } },
+    payload: event === 'push' ? { before, after } : { pull_request: { changed_files: count } },
   }, {
     setOutput(name, value) { outputs[name] = value; },
     notice() {},
@@ -124,7 +144,9 @@ for (const [name, input] of [
   ['API failure', { paths: releaseSkill, apiError: true }],
 ]) {
   test(`${name} runs full CI`, async () => {
-    assert.equal((await run(input)).outputs.code_impacting, 'true');
+    const { outputs } = await run(input);
+    assert.equal(outputs.code_impacting, 'true');
+    assert.equal(outputs.packaging_impacting, 'true');
   });
 }
 
@@ -132,30 +154,138 @@ test('uses the paginating API for more than one page', async () => {
   const paths = Array.from({ length: 205 }, (_, i) => `docs/${i}.md`);
   const result = await run({ paths });
   assert.equal(result.outputs.code_impacting, 'false');
-  assert.deepEqual(result.calls, [{ method: 'pulls.listFiles', args: {
+  assert.deepEqual(result.calls.filter(c => c.method !== 'pulls.get'), [{ method: 'pulls.listFiles', args: {
     owner: 'pwrdrvr', repo: 'PwrRoute', pull_number: 93, per_page: 100,
   } }]);
 });
 
-test('pushes always run full CI without querying PR files', async () => {
-  const result = await run({ paths: releaseSkill, event: 'push' });
-  assert.equal(result.outputs.code_impacting, 'true');
-  assert.equal(result.calls.length, 0);
+test('pushes always run every job, without querying PR files', async () => {
+  for (const paths of [releaseSkill, ['crates/pwrroute-engine/src/lib.rs']]) {
+    const result = await run({ paths, event: 'push' });
+    assert.equal(result.outputs.code_impacting, 'true');
+    assert.ok(result.calls.every(c => !c.method.startsWith('pulls.')));
+  }
 });
 
-test('classifier job output fails open to full CI after script failures or missing output', async () => {
-  assert.match(workflow, /continue-on-error: true/);
-  const expression = workflow.match(/code_impacting: \$\{\{ (.+) \}\}/)[1];
-  const output = (outcome, value) => new Function('steps', `return (${expression});`)({
-    classify: { outcome, outputs: { code_impacting: value } },
-  });
-  assert.equal(output('success', 'false'), false);
-  for (const [outcome, value] of [
-    ['success', 'true'], ['success', undefined], ['failure', 'false'],
-    ['failure', undefined], ['skipped', undefined], ['cancelled', 'false'],
-  ]) assert.equal(output(outcome, value), true);
-  await assert.rejects(run({ paths: releaseSkill, summaryError: true }), /summary unavailable/);
+// What the macOS bundle is built from, plus the dependencies, toolchain and
+// CI setup.
+const packagingPaths = [
+  'packaging/macos/Info.plist.in', 'packaging/icon/PwrRoute.icon/icon.json',
+  'packaging/dmg/background.png', 'packaging/linux/pwrroute.desktop',
+  'scripts/release/macos-dmg.sh', 'xtask/src/macos.rs', 'xtask/Cargo.toml',
+  'Cargo.lock', 'Cargo.toml', 'crates/pwrroute-app/Cargo.toml',
+  'rust-toolchain.toml', '.cargo/config.toml', '.github/workflows/ci.yml',
+  '.github/actions/select-xcode-for-actool/action.yml',
+];
+const ordinaryCode = [
+  'crates/pwrroute-app/src/main.rs', 'crates/pwrroute-app/build.rs',
+  'crates/pwrroute-engine/assets/finicky.js', 'e2e/CONTRACT.md.json',
+  'scripts/ci/classify-changes.test.cjs', '.github/workflows/release.yml',
+  'CHANGELOG.md', 'THIRD_PARTY_LICENSES', 'docs/packaging.md',
+  'packaging-notes.txt', 'other/xtask/main.rs', 'crates/Cargo.toml.bak',
+];
+
+test('packaging inputs select the bundle check on PRs, including renames', async () => {
+  for (const path of packagingPaths) {
+    for (const paths of [[path], [...ordinaryCode, path], [...releaseSkill, path]]) {
+      const { outputs } = await run({ paths });
+      assert.equal(outputs.packaging_impacting, 'true', path);
+      assert.equal(outputs.code_impacting, 'true', path);
+    }
+    for (const [previous_filename, filename] of [[path, 'src/moved.rs'], ['src/moved.rs', path]]) {
+      assert.equal((await run({ files: [{ filename, previous_filename, status: 'renamed' }] }))
+        .outputs.packaging_impacting, 'true', `rename: ${previous_filename} to ${filename}`);
+    }
+  }
 });
+
+test('ordinary code and docs skip the bundle check on PRs', async () => {
+  for (const paths of [ordinaryCode, releaseSkill, ...ordinaryCode.map(path => [path])]) {
+    assert.equal((await run({ paths })).outputs.packaging_impacting, 'false', paths.join());
+  }
+  assert.equal((await run({ paths: ordinaryCode })).outputs.code_impacting, 'true');
+});
+
+test('the full-ci label runs everything, even for docs, read live', async () => {
+  const result = await run({ paths: releaseSkill, labels: ['documentation', 'full-ci'] });
+  assert.equal(result.outputs.code_impacting, 'true');
+  assert.equal(result.outputs.packaging_impacting, 'true');
+  assert.deepEqual(result.calls[0], { method: 'pulls.get', args: {
+    owner: 'pwrdrvr', repo: 'PwrRoute', pull_number: 93 } });
+  const other = await run({ paths: ordinaryCode, labels: ['build-preview', 'full-ci-later'] });
+  assert.equal(other.outputs.packaging_impacting, 'false');
+});
+
+test('a failed label lookup runs full CI', async () => {
+  const { outputs } = await run({ paths: releaseSkill, labelError: true });
+  assert.equal(outputs.code_impacting, 'true');
+  assert.equal(outputs.packaging_impacting, 'true');
+});
+
+test('main pushes bundle only when the pushed range has a packaging input', async () => {
+  for (const path of packagingPaths) {
+    const result = await run({ event: 'push', paths: [...ordinaryCode, path] });
+    assert.equal(result.outputs.packaging_impacting, 'true', path);
+  }
+  const renamed = await run({ event: 'push', files: [
+    { filename: 'src/moved.rs', previous_filename: 'xtask/src/old.rs', status: 'renamed' }] });
+  assert.equal(renamed.outputs.packaging_impacting, 'true');
+  const result = await run({ event: 'push', paths: ordinaryCode });
+  assert.equal(result.outputs.packaging_impacting, 'false');
+  assert.equal(result.outputs.code_impacting, 'true');
+  assert.deepEqual(result.calls, [{ method: 'repos.compareCommitsWithBasehead', args: {
+    owner: 'pwrdrvr', repo: 'PwrRoute', basehead: `${sha('a')}...${sha('b')}` } }]);
+});
+
+for (const [name, input] of [
+  ['new branch (zero before)', { before: sha('0') }],
+  ['missing before', { before: null }],
+  ['malformed before', { before: 'HEAD~1' }],
+  ['malformed after', { after: 'main' }],
+  ['compare failure', { compareError: true }],
+  ['force push', { compare: { status: 'diverged', files: [] } }],
+  ['behind range', { compare: { status: 'behind', files: [{ filename: 'src/a.rs' }] } }],
+  ['identical range', { compare: { status: 'identical', files: [] } }],
+  ['empty file list', { compare: { status: 'ahead', files: [] } }],
+  ['300-file compare cap', { compare: { status: 'ahead',
+    files: Array.from({ length: 300 }, (_, i) => ({ filename: `src/${i}.rs` })) } }],
+  ['malformed file', { compare: { status: 'ahead', files: [{}] } }],
+  ['duplicate files', { compare: { status: 'ahead',
+    files: [{ filename: 'src/a.rs' }, { filename: 'src/a.rs' }] } }],
+  ['rename without old path', { compare: { status: 'ahead',
+    files: [{ filename: 'src/a.rs', status: 'renamed' }] } }],
+  ['missing files', { compare: { status: 'ahead' } }],
+  ['missing compare body', { compare: null }],
+]) {
+  test(`main push with ${name} runs the bundle check`, async () => {
+    const { outputs } = await run({ event: 'push', paths: ordinaryCode, ...input });
+    assert.equal(outputs.packaging_impacting, 'true');
+    assert.equal(outputs.code_impacting, 'true');
+  });
+}
+
+test('other events run full CI', async () => {
+  const { outputs, calls } = await run({ event: 'workflow_dispatch', paths: releaseSkill });
+  assert.equal(outputs.code_impacting, 'true');
+  assert.equal(outputs.packaging_impacting, 'true');
+  assert.equal(calls.length, 0);
+});
+
+for (const field of ['code_impacting', 'packaging_impacting']) {
+  test(`${field} job output fails open after script failures or missing output`, async () => {
+    assert.match(workflow, /continue-on-error: true/);
+    const expression = workflow.match(new RegExp(`      ${field}: \\$\\{\\{ (.+) \\}\\}`))[1];
+    const output = (outcome, value) => new Function('steps', `return (${expression});`)({
+      classify: { outcome, outputs: { [field]: value } },
+    });
+    assert.equal(output('success', 'false'), false);
+    for (const [outcome, value] of [
+      ['success', 'true'], ['success', undefined], ['failure', 'false'],
+      ['failure', undefined], ['skipped', undefined], ['cancelled', 'false'],
+    ]) assert.equal(output(outcome, value), true);
+    await assert.rejects(run({ paths: releaseSkill, summaryError: true }), /summary unavailable/);
+  });
+}
 
 test('expensive jobs run on classifier failure and skip only on explicit non-code success', () => {
   for (const id of ['typecheck', 'build', 'test', 'macos', 'windows', 'e2e-linux', 'e2e-macos', 'e2e-windows']) {
@@ -182,6 +312,34 @@ test('expensive jobs run on classifier failure and skip only on explicit non-cod
       event: { pull_request: { head: { repo: { full_name: 'someone/fork' } } } } };
     assert.equal(evaluate(needs, github, () => false), true, `${id}: fork PR runs`);
   }
+});
+
+test('the macOS job bundles only when a packaging input changed', () => {
+  const job = workflow.split('\n  macos:\n')[1].split(/\n  [a-z][\w-]*:\n/)[0];
+  const steps = job.split(/^      - /m);
+  const gated = ['name: Select an Xcode with actool 26', 'name: Bundle'].map(name => {
+    const step = steps.find(s => s.startsWith(name));
+    assert.ok(step, name);
+    const expression = step.match(/        if: >-\n([\s\S]*?)\n        (?:uses|env|run):/)?.[1];
+    assert.ok(expression, `${name} must be gated`);
+    return new Function('needs', `return (${expression});`);
+  });
+  assert.match(steps.find(s => s.startsWith('name: Bundle')), /run: cargo xtask bundle/);
+  for (const evaluate of gated) {
+    for (const [result, output, expected] of [
+      ['success', 'false', false], ['success', 'true', true], ['success', '', true],
+      ['failure', 'false', true], ['failure', '', true], ['skipped', '', true],
+    ]) {
+      assert.equal(evaluate({ changes: { result, outputs: { packaging_impacting: output } } }),
+        expected, `${result}/${output}`);
+    }
+  }
+  // Tests stay ungated: only the bundle waits for packaging inputs.
+  const testStep = steps.find(s => s.startsWith('name: Test\n'));
+  assert.doesNotMatch(testStep, /packaging_impacting/);
+  // The only other job gated on packaging is none: every other job keeps
+  // running on each code change.
+  assert.equal(workflow.split('needs.changes.outputs.packaging_impacting').length - 1, 2);
 });
 
 test('required check names stay present and the workflow trigger has no path filters', () => {

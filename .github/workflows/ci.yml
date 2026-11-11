@@ -38,13 +38,17 @@ env:
 
 jobs:
   # Keep the pull_request trigger path-unfiltered so the required check jobs
-  # exist on every PR. Non-code-only PRs skip those jobs below instead.
+  # exist on every PR. Non-code-only PRs skip those jobs below instead. The
+  # macOS Bundle step also waits for a packaging input to change, on PRs and
+  # on main pushes alike, or for a PR's full-ci label (add it, then push or
+  # use Re-run all jobs: Re-run failed jobs keeps the classifier's answer).
   changes:
     name: Classify Changes
     runs-on: ubuntu-latest
     outputs:
       # Only an explicit false from a successful classifier may skip CI.
       code_impacting: ${{ steps.classify.outcome != 'success' || steps.classify.outputs.code_impacting != 'false' }}
+      packaging_impacting: ${{ steps.classify.outcome != 'success' || steps.classify.outputs.packaging_impacting != 'false' }}
     steps:
       - name: Classify changed files
         id: classify
@@ -55,21 +59,97 @@ jobs:
           script: |
             const fullCi = (reason) => {
               core.setOutput("code_impacting", "true");
+              core.setOutput("packaging_impacting", "true");
               core.notice(`Running full CI: ${reason}`);
             };
+
+            const {owner, repo} = context.repo;
+            const pathsOf = (file) =>
+              [file.filename, file.previous_filename].filter(Boolean);
+            // Unknown/malformed entries are not evidence for skipping CI.
+            const malformed = (files) => files.some((file) => !file ||
+              typeof file.filename !== "string" || file.filename.length === 0 ||
+              (file.previous_filename !== undefined &&
+               (typeof file.previous_filename !== "string" || file.previous_filename.length === 0)) ||
+              (file.status === "renamed" && !file.previous_filename)) ||
+              new Set(files.map((file) => file.filename)).size !== files.length;
+
+            // What the macOS bundle is built from, plus the dependencies,
+            // toolchain and CI setup, where a release-profile or packaging
+            // break comes from.
+            const isPackagingPath = (path) =>
+              path === "Cargo.lock" || path === "Cargo.toml" ||
+              path.endsWith("/Cargo.toml") || path === "rust-toolchain.toml" ||
+              path.startsWith(".cargo/") || path.startsWith("packaging/") ||
+              path.startsWith("scripts/release/") || path.startsWith("xtask/") ||
+              path === ".github/workflows/ci.yml" ||
+              path.startsWith(".github/actions/select-xcode-for-actool/");
+            const packagingFile = (files) =>
+              files.find((file) => pathsOf(file).some(isPackagingPath));
+
+            if (context.eventName === "push") {
+              // Main always runs every check; only the bundle waits for a
+              // commit range that needs it.
+              core.setOutput("code_impacting", "true");
+              const runPackaging = (reason) => {
+                core.setOutput("packaging_impacting", "true");
+                core.notice(`Running the bundle check: ${reason}`);
+              };
+              const {before, after} = context.payload;
+              if (!/^[0-9a-f]{40}$/.test(before ?? "") || /^0+$/.test(before) ||
+                  !/^[0-9a-f]{40}$/.test(after ?? "")) {
+                runPackaging("the push has no previous commit to compare");
+                return;
+              }
+              let data;
+              try {
+                ({data} = await github.rest.repos.compareCommitsWithBasehead({
+                  owner, repo, basehead: `${before}...${after}`,
+                }));
+              } catch (error) {
+                runPackaging(`compare failed (${error.message})`);
+                return;
+              }
+              // The compare API lists at most 300 files; a force push is "diverged".
+              if (data?.status !== "ahead" || !Array.isArray(data.files) ||
+                  data.files.length === 0 || data.files.length >= 300 ||
+                  malformed(data.files)) {
+                runPackaging(`compare was not a complete fast-forward (${data?.status}, ${data?.files?.length} files)`);
+                return;
+              }
+              const hit = packagingFile(data.files);
+              core.setOutput("packaging_impacting", String(hit !== undefined));
+              core.notice(hit
+                ? `The bundle check runs because \`${hit.filename}\` changed.`
+                : "No packaging input changed; the bundle check is skipped.");
+              return;
+            }
 
             if (context.eventName !== "pull_request") {
               fullCi(`${context.eventName} events always run full CI`);
               return;
             }
 
+            // Read live, so adding the label and re-running all jobs is enough.
+            let labels;
+            try {
+              const {data} = await github.rest.pulls.get({
+                owner, repo, pull_number: context.issue.number,
+              });
+              labels = data.labels.map((label) => label.name);
+            } catch (error) {
+              fullCi(`label lookup failed (${error.message})`);
+              return;
+            }
+            if (labels.includes("full-ci")) {
+              fullCi("the PR has the full-ci label");
+              return;
+            }
+
             let files;
             try {
               files = await github.paginate(github.rest.pulls.listFiles, {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.issue.number,
-                per_page: 100,
+                owner, repo, pull_number: context.issue.number, per_page: 100,
               });
             } catch (error) {
               fullCi(`changed-file lookup failed (${error.message})`);
@@ -85,13 +165,7 @@ jobs:
               return;
             }
 
-            // Unknown/malformed entries are not evidence for skipping CI.
-            if (files.some((file) => !file || typeof file.filename !== "string" ||
-                file.filename.length === 0 ||
-                (file.previous_filename !== undefined &&
-                 (typeof file.previous_filename !== "string" || file.previous_filename.length === 0)) ||
-                (file.status === "renamed" && !file.previous_filename)) ||
-                new Set(files.map((file) => file.filename)).size !== reportedCount) {
+            if (malformed(files)) {
               fullCi("changed-file list had invalid or duplicate entries");
               return;
             }
@@ -108,13 +182,13 @@ jobs:
                 path.startsWith(".github/PULL_REQUEST_TEMPLATE/") ||
                 path.toLowerCase().endsWith(".md");
             };
-            const codeImpactingFile = files.find((file) => {
-              const paths = [file.filename, file.previous_filename].filter(Boolean);
-              return paths.some((path) => !isNonCodePath(path));
-            });
+            const codeImpactingFile = files.find((file) =>
+              pathsOf(file).some((path) => !isNonCodePath(path)));
             const nonCodeOnly = codeImpactingFile === undefined;
+            const packagingHit = packagingFile(files);
 
             core.setOutput("code_impacting", String(!nonCodeOnly));
+            core.setOutput("packaging_impacting", String(packagingHit !== undefined));
             await core.summary
               .addHeading("Changed-file classification")
               .addTable([
@@ -122,9 +196,12 @@ jobs:
                 [nonCodeOnly ? "Non-code only" : "Code impacting", String(files.length)],
               ])
               .addRaw(
-                nonCodeOnly
+                (nonCodeOnly
                   ? "Only documentation, the design mirror, agent skills, PR/issue templates or Dependabot configuration changed; expensive CI jobs are skipped."
-                  : `Full CI runs because \`${codeImpactingFile.filename}\` requires it.`,
+                  : `Full CI runs because \`${codeImpactingFile.filename}\` requires it.`) +
+                (packagingHit
+                  ? ` The macOS bundle check runs because \`${packagingHit.filename}\` changed.`
+                  : " The macOS bundle check is skipped; add the full-ci label and use Re-run all jobs to force it."),
               )
               .write();
 
@@ -360,11 +437,21 @@ jobs:
       # CI checks the app only; preview/release jobs exercise the full DMG.
       # All packaging uses the image's Xcode 26+ without changing its global
       # selection. A missing icon compiler is a runner prerequisite.
+      # Only when a packaging input changed (or the PR has the full-ci
+      # label): the bundle took a median 5.6 minutes on PRs, serially after
+      # the tests, on the job that sets every run's wall time. Linux's Build
+      # job still builds the release profile on every code change.
       - name: Select an Xcode with actool 26
         id: xcode
+        if: >-
+          needs.changes.result != 'success' ||
+          needs.changes.outputs.packaging_impacting != 'false'
         uses: ./.github/actions/select-xcode-for-actool
 
       - name: Bundle
+        if: >-
+          needs.changes.result != 'success' ||
+          needs.changes.outputs.packaging_impacting != 'false'
         env:
           DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
         run: cargo xtask bundle --app-only --require-icon-catalog
