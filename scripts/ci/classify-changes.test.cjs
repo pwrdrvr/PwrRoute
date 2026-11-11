@@ -176,12 +176,14 @@ const packagingPaths = [
   'Cargo.lock', 'Cargo.toml', 'crates/pwrroute-app/Cargo.toml',
   'rust-toolchain.toml', '.cargo/config.toml', '.github/workflows/ci.yml',
   '.github/actions/select-xcode-for-actool/action.yml',
+  // xtask/src/macos.rs copies these into the bundle's Resources.
+  'LICENSE', 'THIRD_PARTY_LICENSES', 'CHANGELOG.md',
 ];
 const ordinaryCode = [
   'crates/pwrroute-app/src/main.rs', 'crates/pwrroute-app/build.rs',
   'crates/pwrroute-engine/assets/finicky.js', 'e2e/CONTRACT.md.json',
   'scripts/ci/classify-changes.test.cjs', '.github/workflows/release.yml',
-  'CHANGELOG.md', 'THIRD_PARTY_LICENSES', 'docs/packaging.md',
+  'licenses/bundled.txt', 'LICENSE.md', 'docs/packaging.md',
   'packaging-notes.txt', 'other/xtask/main.rs', 'crates/Cargo.toml.bak',
 ];
 
@@ -337,9 +339,11 @@ test('the macOS job bundles only when a packaging input changed', () => {
   // Tests stay ungated: only the bundle waits for packaging inputs.
   const testStep = steps.find(s => s.startsWith('name: Test\n'));
   assert.doesNotMatch(testStep, /packaging_impacting/);
-  // The only other job gated on packaging is none: every other job keeps
-  // running on each code change.
-  assert.equal(workflow.split('needs.changes.outputs.packaging_impacting').length - 1, 2);
+  // No job is gated on packaging: every job runs on each code change, and
+  // only these two steps of the macOS job wait for a packaging input.
+  for (const match of workflow.matchAll(/^    if: >-\n((?:      .*\n)+)/gm)) {
+    assert.doesNotMatch(match[1], /packaging_impacting/);
+  }
 });
 
 test('required check names stay present and the workflow trigger has no path filters', () => {

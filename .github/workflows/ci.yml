@@ -74,10 +74,13 @@ jobs:
               (file.status === "renamed" && !file.previous_filename)) ||
               new Set(files.map((file) => file.filename)).size !== files.length;
 
-            // What the macOS bundle is built from, plus the dependencies,
-            // toolchain and CI setup, where a release-profile or packaging
-            // break comes from.
+            // What the macOS bundle is built from (xtask/src/macos.rs also
+            // copies LICENSE, THIRD_PARTY_LICENSES and CHANGELOG.md into it),
+            // plus the dependencies, toolchain and CI setup, where a
+            // release-profile or packaging break comes from.
             const isPackagingPath = (path) =>
+              path === "LICENSE" || path === "THIRD_PARTY_LICENSES" ||
+              path === "CHANGELOG.md" ||
               path === "Cargo.lock" || path === "Cargo.toml" ||
               path.endsWith("/Cargo.toml") || path === "rust-toolchain.toml" ||
               path.startsWith(".cargo/") || path.startsWith("packaging/") ||

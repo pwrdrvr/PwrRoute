@@ -145,7 +145,8 @@ workflow change to that PR selects full CI. Unknown paths also run full CI.
 A rename qualifies only if both paths qualify; missing rename metadata runs
 full CI.
 
-Push events always run every job. API errors, empty or incomplete pagination
+Push events always run every job (the macOS bundle step still waits for a
+packaging input; see below). API errors, empty or incomplete pagination
 (including GitHub's 3,000-file limit), invalid counts, malformed file entries
 and duplicate results also run full CI. A script failure or missing output
 cannot opt out: the job output defaults to full CI unless the classifier
@@ -169,13 +170,16 @@ workflow/cleanup regression tests; Node.js 22 or newer must be on `PATH`
 The `Bundle` step of the `macos` job, and the Xcode selection before it,
 run only when a packaging input changes. Those inputs are `packaging/**`,
 `scripts/release/**`, `xtask/**`, `Cargo.lock`, any `Cargo.toml`,
-`rust-toolchain.toml`, `.cargo/**`, `ci.yml` and the
-`select-xcode-for-actool` action: what the bundle is built from, and the
+`rust-toolchain.toml`, `.cargo/**`, `ci.yml`, the
+`select-xcode-for-actool` action, and `LICENSE`, `THIRD_PARTY_LICENSES` and
+`CHANGELOG.md`, which the bundle copies into its resources: what the bundle is built from, and the
 dependency, toolchain and CI changes a release-profile or packaging break
 comes from. A rename counts if either path is an input. Every other job
 still runs on every code change, so the PR keeps Linux, macOS and Windows
 tests, and Linux's `Build` job keeps a release-profile build of the
-workspace.
+workspace. The bundle was the only macOS release-profile build, so a break
+in macOS-only code under `cfg(not(debug_assertions))` now shows up only on
+a packaging change, a `full-ci` run, a `build-preview` build or a release.
 
 In the 33 PR runs and 20 `main` pushes from November 4 to 11, 2026, the
 macOS job set the wall time of nearly every run, and its bundle step ran
