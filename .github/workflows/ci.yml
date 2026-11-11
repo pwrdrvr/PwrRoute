@@ -171,14 +171,13 @@ jobs:
           # compiles cold for 35+ minutes. PRs restore main's cache instead.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # This pin decides the cargo-deny and cargo-about releases (0.20.2 and
-      # 0.9.2 at v2.87.29). The dormant scripts/sandboxer/verify.sh records the same
-      # ones; move its pins with this one, as cargo-about's output changes
+      # Keep these tool versions in step with the setup instructions and the
+      # dormant scripts/sandboxer/verify.sh. cargo-about's output changes
       # between releases.
       - name: Install cargo-deny and cargo-about
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
-          tool: cargo-deny,cargo-about
+          tool: cargo-deny@0.20.2,cargo-about@0.9.2
 
       # One aggregate step on purpose: `cargo xtask lint` chains the checks
       # cheapest-first (rustfmt, clippy, cargo-deny, THIRD_PARTY_LICENSES), so
@@ -269,7 +268,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -336,7 +335,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -424,7 +423,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -503,7 +502,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -596,7 +595,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -673,7 +672,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
