@@ -255,7 +255,7 @@ jobs:
       # dormant scripts/sandboxer/verify.sh. cargo-about's output changes
       # between releases.
       - name: Install cargo-deny and cargo-about
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-deny@0.20.2,cargo-about@0.9.2
 
@@ -348,7 +348,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -415,7 +415,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -513,7 +513,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -592,7 +592,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -685,7 +685,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
@@ -762,7 +762,7 @@ jobs:
           python-version: "3.13"
 
       - name: Install pinned nextest
-        uses: taiki-e/install-action@b80e2bb2635f28eb98b9fce1e2f0887e1535c6b2 # v2.90.0
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.149
           fallback: none
