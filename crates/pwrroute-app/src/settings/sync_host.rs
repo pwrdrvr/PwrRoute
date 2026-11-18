@@ -10,6 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{App, SharedString};
+use jiff::{Timestamp, Zoned, tz::TimeZone};
 use pwrroute_engine::{BindingSource, MachineFile, RulesFile};
 use pwrroute_sync::{ConflictKind, Health, Place, Status, Target, TargetStatus, Wait};
 
@@ -511,14 +512,17 @@ pub fn here() -> &'static str {
 }
 
 fn when(ms: u64) -> String {
-    use chrono::{Local, TimeZone as _};
-    let Some(at) = Local.timestamp_millis_opt(ms as i64).single() else {
+    let Some(at) = i64::try_from(ms)
+        .ok()
+        .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+    else {
         return String::new();
     };
-    if at.date_naive() == Local::now().date_naive() {
-        at.format("%H:%M").to_string()
+    let at = at.to_zoned(TimeZone::system());
+    if at.date() == Zoned::now().date() {
+        at.strftime("%H:%M").to_string()
     } else {
-        at.format("%b %-d %H:%M").to_string()
+        at.strftime("%b %-d %H:%M").to_string()
     }
 }
 

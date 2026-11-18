@@ -19,9 +19,10 @@ use pwrroute_engine::{Source, Stage, Step, TestFailure, TestSource, discovery};
 
 use crate::app::{PwrRoute, Selection};
 use crate::config_view::display_path;
+use crate::local_time::clock;
 use crate::rule_menu::{self, MenuRow};
 use crate::rules_model::{Destination, Matcher, RowBadge, Rule};
-use crate::rules_store::{RulesStore, clock};
+use crate::rules_store::RulesStore;
 use crate::theme::{self, mono, text, tracked};
 use crate::widgets::{
     ButtonKind, Tone, action_tag, add_button, app_tag, badge, badge_for, button, chip, fn_tag,

@@ -41,6 +41,7 @@ mod handoff;
 mod help;
 mod importer;
 mod importer_view;
+mod local_time;
 mod log_view;
 mod logs_window;
 #[cfg(target_os = "macos")]

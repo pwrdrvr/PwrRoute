@@ -7,8 +7,8 @@
 
 use std::time::SystemTime;
 
-use chrono::{DateTime, Local};
 use gpui_kit::{App, SharedString};
+use jiff::{Zoned, civil::Date};
 
 use super::model::{SettingsRequest, SlotTile, UpdateState, Updates};
 use crate::settings;
@@ -23,7 +23,7 @@ pub fn initial() -> Updates {
         },
         &UpdateSettings::default(),
         &State::default(),
-        Local::now(),
+        Zoned::now().date(),
     )
 }
 
@@ -33,16 +33,16 @@ pub fn model() -> Updates {
         &updater::installation(),
         &updater::selection(),
         &updater::state(),
-        Local::now(),
+        Zoned::now().date(),
     )
 }
 
-/// The model from its parts, as of `now`.
+/// The model from its parts, as of the given local date.
 pub fn build(
     installation: &Installation,
     selection: &UpdateSettings,
     state: &State,
-    now: DateTime<Local>,
+    today: Date,
 ) -> Updates {
     let (version, install, not_updatable) = match installation {
         Installation::Velopack { version } => (
@@ -101,7 +101,7 @@ pub fn build(
         version: version.into(),
         install: install.into(),
         state: state_shown,
-        last_checked: last.map(|last| clock(last.at, now)),
+        last_checked: last.and_then(|last| clock(last.at, today)),
     }
 }
 
@@ -153,12 +153,12 @@ fn about(slot: Slot) -> &'static str {
 }
 
 /// "Today 08:13", or the date for another day.
-fn clock(at: SystemTime, now: DateTime<Local>) -> SharedString {
-    let at: DateTime<Local> = at.into();
-    if at.date_naive() == now.date_naive() {
-        format!("Today {}", at.format("%H:%M")).into()
+fn clock(at: SystemTime, today: Date) -> Option<SharedString> {
+    let at = Zoned::try_from(at).ok()?;
+    if at.date() == today {
+        Some(format!("Today {}", at.strftime("%H:%M")).into())
     } else {
-        at.format("%Y-%m-%d %H:%M").to_string().into()
+        Some(at.strftime("%Y-%m-%d %H:%M").to_string().into())
     }
 }
 
@@ -239,11 +239,10 @@ mod tests {
     }
 
     /// A fixed local time, so "Today" never depends on when the test runs.
-    fn local(hour: u32, minute: u32, second: u32) -> DateTime<Local> {
-        use chrono::TimeZone;
-        Local
-            .with_ymd_and_hms(2026, 10, 23, hour, minute, second)
-            .single()
+    fn local(hour: i8, minute: i8, second: i8) -> Zoned {
+        jiff::civil::date(2026, 10, 23)
+            .at(hour, minute, second, 0)
+            .to_zoned(jiff::tz::TimeZone::system())
             .expect("an unambiguous local time")
     }
 
@@ -253,7 +252,7 @@ mod tests {
             &velopack("0.2.0"),
             &inferred(),
             &State::default(),
-            Local::now(),
+            Zoned::now().date(),
         );
         assert_eq!(model.version, "0.2.0");
         assert_eq!(model.channel, "Stable \u{00b7} Latest");
@@ -280,11 +279,11 @@ mod tests {
     #[test]
     fn the_build_implies_the_slot_until_one_is_picked() {
         let rc = velopack("0.1.0-rc.3");
-        let model = build(&rc, &inferred(), &State::default(), Local::now());
+        let model = build(&rc, &inferred(), &State::default(), Zoned::now().date());
         assert_eq!(model.channel, "Stable \u{00b7} Prerelease");
         assert!(model.slots[1].selected);
         let picked = UpdateSettings::picked(Slot::BETA_LATEST);
-        let model = build(&rc, &picked, &State::default(), Local::now());
+        let model = build(&rc, &picked, &State::default(), Zoned::now().date());
         assert_eq!(model.channel, "Beta \u{00b7} Latest");
         assert!(!model.inferred);
         assert!(model.slots[2].selected);
@@ -295,7 +294,12 @@ mod tests {
         let installation = Installation::NotInstalled {
             why: "no manifest".to_owned(),
         };
-        let model = build(&installation, &inferred(), &State::default(), Local::now());
+        let model = build(
+            &installation,
+            &inferred(),
+            &State::default(),
+            Zoned::now().date(),
+        );
         assert_eq!(model.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(
             model.channel,
@@ -324,7 +328,7 @@ mod tests {
             releases: Some(Ok(releases)),
             ..State::default()
         };
-        let model = build(&velopack("0.1.0"), &inferred(), &read, Local::now());
+        let model = build(&velopack("0.1.0"), &inferred(), &read, Zoned::now().date());
         let shown: Vec<_> = model
             .slots
             .iter()
@@ -348,13 +352,18 @@ mod tests {
             releases: Some(Ok(vec![Release::new("v0.1.0-rc.1", true)])),
             ..State::default()
         };
-        let model = build(&velopack("0.1.0"), &inferred(), &empty, Local::now());
+        let model = build(&velopack("0.1.0"), &inferred(), &empty, Zoned::now().date());
         assert_eq!(model.slots[0].note, "Nothing published here yet.");
         let failed = State {
             releases: Some(Err("GitHub answered 500".into())),
             ..State::default()
         };
-        let model = build(&velopack("0.1.0"), &inferred(), &failed, Local::now());
+        let model = build(
+            &velopack("0.1.0"),
+            &inferred(),
+            &failed,
+            Zoned::now().date(),
+        );
         assert_eq!(model.slots[0].note, "Could not read the release feed.");
     }
 
@@ -363,7 +372,7 @@ mod tests {
         let now = local(12, 0, 0);
         let with = |held: Held| State {
             last: Some(LastCheck {
-                at: SystemTime::from(now),
+                at: SystemTime::from(&now),
                 slot: Slot::from_key(&held.slot).unwrap(),
                 outcome: Outcome::Downloaded(held.version.clone()),
             }),
@@ -375,7 +384,7 @@ mod tests {
             &copy,
             &inferred(),
             &with(held("0.1.1", Slot::STABLE_LATEST, false)),
-            now,
+            now.date(),
         );
         assert_eq!(model.state, UpdateState::Ready("0.1.1".into()));
         // Picked another slot: neither the download nor its check result
@@ -385,7 +394,7 @@ mod tests {
             &copy,
             &beta,
             &with(held("0.1.1", Slot::STABLE_LATEST, false)),
-            now,
+            now.date(),
         );
         assert_eq!(model.state, UpdateState::NeverChecked);
         assert_eq!(model.last_checked, None);
@@ -394,7 +403,7 @@ mod tests {
             &copy,
             &beta,
             &with(held("0.0.9", Slot::BETA_LATEST, true)),
-            now,
+            now.date(),
         );
         assert_eq!(model.state, UpdateState::SwitchReady("0.0.9".into()));
     }
@@ -408,8 +417,8 @@ mod tests {
             Outcome::NothingPublished(Slot::STABLE_LATEST.to_string()),
             Outcome::Failed("offline".into()),
         ] {
-            let old = state(false, Some((SystemTime::from(now), outcome)));
-            let model = build(&velopack("0.2.0"), &beta, &old, now);
+            let old = state(false, Some((SystemTime::from(&now), outcome)));
+            let model = build(&velopack("0.2.0"), &beta, &old, now.date());
             assert_eq!(model.state, UpdateState::NeverChecked);
             assert_eq!(model.last_checked, None);
         }
@@ -418,10 +427,10 @@ mod tests {
     #[test]
     fn the_last_outcome_becomes_the_state_and_the_time() {
         let now = local(12, 0, 0);
-        let at = |ago: Duration| SystemTime::from(now) - ago;
+        let at = |ago: Duration| SystemTime::from(&now) - ago;
         let copy = velopack("0.2.0");
 
-        let model = build(&copy, &inferred(), &state(true, None), now);
+        let model = build(&copy, &inferred(), &state(true, None), now.date());
         assert_eq!(model.state, UpdateState::Checking);
 
         let model = build(
@@ -434,7 +443,7 @@ mod tests {
                     Outcome::UpToDate("0.2.0".into()),
                 )),
             ),
-            now,
+            now.date(),
         );
         assert_eq!(model.state, UpdateState::UpToDate);
         assert_eq!(model.last_checked.unwrap(), "Today 11:59");
@@ -449,7 +458,7 @@ mod tests {
                     Outcome::NothingPublished("Stable \u{00b7} Latest".into()),
                 )),
             ),
-            now,
+            now.date(),
         );
         assert_eq!(model.state, UpdateState::NothingPublished);
         let checked = model.last_checked.unwrap();
@@ -463,7 +472,7 @@ mod tests {
                 false,
                 Some((at(Duration::ZERO), Outcome::Failed("timed out".into()))),
             ),
-            now,
+            now.date(),
         );
         assert_eq!(
             model.state,
@@ -504,9 +513,9 @@ mod tests {
     #[test]
     fn a_check_before_midnight_is_dated_after_it() {
         let now = local(0, 0, 30);
-        let checked = SystemTime::from(now) - Duration::from_secs(60);
+        let checked = SystemTime::from(&now) - Duration::from_secs(60);
         let state = state(false, Some((checked, Outcome::UpToDate("0.2.0".into()))));
-        let model = build(&velopack("0.2.0"), &inferred(), &state, now);
+        let model = build(&velopack("0.2.0"), &inferred(), &state, now.date());
         assert_eq!(model.last_checked.unwrap(), "2026-10-22 23:59");
     }
 }

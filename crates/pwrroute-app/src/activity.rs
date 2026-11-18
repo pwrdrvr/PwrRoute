@@ -31,13 +31,13 @@ use std::io;
 use std::time::SystemTime;
 
 use crate::theme::px;
-use chrono::{DateTime, Local, NaiveDate};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, Global, InteractiveElement as _,
     IntoElement, KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, Window, div,
 };
+use jiff::{Zoned, civil::Date};
 use pwrroute_router::{
     DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, NotOpenedReason, Options,
     Outcome, Owner, Privacy, RetentionInfo, RouterHandle, Step,
@@ -46,6 +46,7 @@ use pwrroute_router::{
 use crate::app::{PwrRoute, Screen};
 use crate::default_browser::browser_name;
 use crate::fixtures;
+use crate::local_time::clock_with_seconds;
 use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
 use crate::theme::{self, icon, mono, text, tracked};
@@ -255,7 +256,7 @@ pub struct Feed {
     /// The bound without a router; with one, the router's retention count.
     capacity: usize,
     /// The local day `counts` is for.
-    day: Option<NaiveDate>,
+    day: Option<Date>,
     counts: Counts,
     /// Today's links by the rule that took them and where they opened.
     tally: Tally,
@@ -342,12 +343,12 @@ impl Feed {
         let day = local_day(record.received_at);
         // Delivery follows I/O completion, so an older local day can arrive
         // after today's tally. Advance the counted day, never rewind it.
-        if self.day.is_none_or(|current| day > current) {
-            self.day = Some(day);
+        if day > self.day {
+            self.day = day;
             self.counts = Counts::default();
             self.tally = Tally::default();
         }
-        if self.day == Some(day) {
+        if day.is_some() && self.day == day {
             self.counts.count(&record);
             self.tally.count(&record);
         }
@@ -460,7 +461,7 @@ impl Feed {
 
     /// Today's counts, by the local calendar; zero once the day has turned.
     pub fn today(&self, now: SystemTime) -> Counts {
-        if self.day == Some(local_day(now)) {
+        if self.day == local_day(now) {
             self.counts
         } else {
             Counts::default()
@@ -470,7 +471,7 @@ impl Feed {
     /// Today's tally by rule and by browser, by the local calendar; empty
     /// once the day has turned. Like the counts, it survives Clear.
     pub fn tally(&self, now: SystemTime) -> Tally {
-        if self.day == Some(local_day(now)) {
+        if self.day == local_day(now) {
             self.tally.clone()
         } else {
             Tally::default()
@@ -533,13 +534,8 @@ pub fn install_feed(feed: Feed, cx: &mut App) -> Entity<Feed> {
     feed
 }
 
-fn local_day(at: SystemTime) -> NaiveDate {
-    DateTime::<Local>::from(at).date_naive()
-}
-
-/// "09:41:08", local time.
-fn clock(at: SystemTime) -> String {
-    DateTime::<Local>::from(at).format("%H:%M:%S").to_string()
+fn local_day(at: SystemTime) -> Option<Date> {
+    Zoned::try_from(at).ok().map(|at| at.date())
 }
 
 /// Which row: a dispatch's id, and whether it came from the journal. Ids
@@ -777,7 +773,7 @@ impl ActivityRow {
                 id: record.id,
                 journaled,
             },
-            time: clock(record.received_at).into(),
+            time: clock_with_seconds(record.received_at).into(),
             url: received.into(),
             from: from.into(),
             rule: rule_label(&record.steps).into(),
@@ -3436,7 +3432,7 @@ mod tests {
         let counts = feed.today(at);
         let tally = feed.tally(at);
         feed.push(feed_completion(2, earlier_day, Privacy::Host));
-        assert_eq!(feed.day, Some(local_day(at)));
+        assert_eq!(feed.day, local_day(at));
         assert_eq!(feed.today(at), counts);
         assert_eq!(feed.tally(at), tally);
         assert_eq!(

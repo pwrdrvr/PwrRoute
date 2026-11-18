@@ -35,6 +35,7 @@ use pwrroute_engine::{self as engine, Place, Precedence, Privacy, Problem, Route
 
 use crate::app::Selection;
 use crate::config_view::display_path;
+use crate::local_time::clock;
 use crate::rules_model::{self, Handler, Rewrite, RowBadge};
 
 /// How the file stands against what is on screen.
@@ -1626,13 +1627,6 @@ impl Problems {
             .map(|p| p.message.clone())
             .collect()
     }
-}
-
-/// A time as the design's labels show it: `09:41`, local.
-pub fn clock(at: SystemTime) -> String {
-    chrono::DateTime::<chrono::Local>::from(at)
-        .format("%H:%M")
-        .to_string()
 }
 
 #[cfg(test)]

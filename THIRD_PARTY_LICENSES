@@ -9929,7 +9929,7 @@ Apache License 2.0 (459)
 - chrono@0.4.45 | https://github.com/chronotope/chrono
 - nonmax@0.5.5 | https://github.com/LPGhatguy/nonmax
 
-MIT License (190)
+MIT License (194)
 - rustybuzz@0.20.1 | https://github.com/harfbuzz/rustybuzz
 - uds_windows@1.2.1 | https://github.com/haraldh/rust_uds_windows
 - freetype-sys@0.20.1 | https://github.com/PistonDevelopers/freetype-sys.git
@@ -10097,6 +10097,10 @@ MIT License (190)
 - byteorder-lite@0.1.0 | https://github.com/image-rs/byteorder-lite
 - byteorder@1.5.0 | https://github.com/BurntSushi/byteorder
 - globset@0.4.20 | https://github.com/BurntSushi/ripgrep/tree/master/crates/globset
+- jiff-core@0.1.5 | https://github.com/BurntSushi/jiff
+- jiff-tzdb-platform@0.1.3 | https://github.com/BurntSushi/jiff
+- jiff-tzdb@0.1.4 | https://github.com/BurntSushi/jiff
+- jiff@0.2.43 | https://github.com/BurntSushi/jiff
 - memchr@2.8.3 | https://github.com/BurntSushi/memchr
 - walkdir@2.5.0 | https://github.com/BurntSushi/walkdir
 - nix@0.31.3 | https://github.com/nix-rust/nix
@@ -24785,6 +24789,10 @@ Applies to:
 - byteorder-lite@0.1.0
 - byteorder@1.5.0
 - globset@0.4.20
+- jiff-core@0.1.5
+- jiff-tzdb-platform@0.1.3
+- jiff-tzdb@0.1.4
+- jiff@0.2.43
 - memchr@2.8.3
 - walkdir@2.5.0
 
