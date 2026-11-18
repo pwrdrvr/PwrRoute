@@ -244,10 +244,7 @@ impl BuildInfo {
 }
 
 fn local(seconds: i64) -> Option<jiff::Zoned> {
-    use jiff::{Timestamp, tz::TimeZone};
-    Timestamp::from_second(seconds)
-        .ok()
-        .map(|time| time.to_zoned(TimeZone::system()))
+    crate::local_time::from_timestamp(jiff::Timestamp::from_second(seconds).ok()?)
 }
 
 #[cfg(test)]

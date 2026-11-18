@@ -8,9 +8,10 @@
 use std::time::SystemTime;
 
 use gpui_kit::{App, SharedString};
-use jiff::{Zoned, civil::Date};
+use jiff::civil::Date;
 
 use super::model::{SettingsRequest, SlotTile, UpdateState, Updates};
+use crate::local_time;
 use crate::settings;
 use crate::settings_store;
 use crate::update_channel::{self, Slot, Track, Train, UpdateSettings};
@@ -23,7 +24,7 @@ pub fn initial() -> Updates {
         },
         &UpdateSettings::default(),
         &State::default(),
-        Zoned::now().date(),
+        local_time::now().date(),
     )
 }
 
@@ -33,7 +34,7 @@ pub fn model() -> Updates {
         &updater::installation(),
         &updater::selection(),
         &updater::state(),
-        Zoned::now().date(),
+        local_time::now().date(),
     )
 }
 
@@ -154,7 +155,7 @@ fn about(slot: Slot) -> &'static str {
 
 /// "Today 08:13", or the date for another day.
 fn clock(at: SystemTime, today: Date) -> Option<SharedString> {
-    let at = Zoned::try_from(at).ok()?;
+    let at = local_time::at(at)?;
     if at.date() == today {
         Some(format!("Today {}", at.strftime("%H:%M")).into())
     } else {
@@ -239,11 +240,8 @@ mod tests {
     }
 
     /// A fixed local time, so "Today" never depends on when the test runs.
-    fn local(hour: i8, minute: i8, second: i8) -> Zoned {
-        jiff::civil::date(2026, 10, 23)
-            .at(hour, minute, second, 0)
-            .to_zoned(jiff::tz::TimeZone::system())
-            .expect("an unambiguous local time")
+    fn local(hour: i8, minute: i8, second: i8) -> jiff::Zoned {
+        local_time::test_wall_time(jiff::civil::date(2026, 10, 23).at(hour, minute, second, 0))
     }
 
     #[test]
@@ -252,7 +250,7 @@ mod tests {
             &velopack("0.2.0"),
             &inferred(),
             &State::default(),
-            Zoned::now().date(),
+            local_time::now().date(),
         );
         assert_eq!(model.version, "0.2.0");
         assert_eq!(model.channel, "Stable \u{00b7} Latest");
@@ -279,11 +277,16 @@ mod tests {
     #[test]
     fn the_build_implies_the_slot_until_one_is_picked() {
         let rc = velopack("0.1.0-rc.3");
-        let model = build(&rc, &inferred(), &State::default(), Zoned::now().date());
+        let model = build(
+            &rc,
+            &inferred(),
+            &State::default(),
+            local_time::now().date(),
+        );
         assert_eq!(model.channel, "Stable \u{00b7} Prerelease");
         assert!(model.slots[1].selected);
         let picked = UpdateSettings::picked(Slot::BETA_LATEST);
-        let model = build(&rc, &picked, &State::default(), Zoned::now().date());
+        let model = build(&rc, &picked, &State::default(), local_time::now().date());
         assert_eq!(model.channel, "Beta \u{00b7} Latest");
         assert!(!model.inferred);
         assert!(model.slots[2].selected);
@@ -298,7 +301,7 @@ mod tests {
             &installation,
             &inferred(),
             &State::default(),
-            Zoned::now().date(),
+            local_time::now().date(),
         );
         assert_eq!(model.version, env!("CARGO_PKG_VERSION"));
         assert_eq!(
@@ -328,7 +331,12 @@ mod tests {
             releases: Some(Ok(releases)),
             ..State::default()
         };
-        let model = build(&velopack("0.1.0"), &inferred(), &read, Zoned::now().date());
+        let model = build(
+            &velopack("0.1.0"),
+            &inferred(),
+            &read,
+            local_time::now().date(),
+        );
         let shown: Vec<_> = model
             .slots
             .iter()
@@ -352,7 +360,12 @@ mod tests {
             releases: Some(Ok(vec![Release::new("v0.1.0-rc.1", true)])),
             ..State::default()
         };
-        let model = build(&velopack("0.1.0"), &inferred(), &empty, Zoned::now().date());
+        let model = build(
+            &velopack("0.1.0"),
+            &inferred(),
+            &empty,
+            local_time::now().date(),
+        );
         assert_eq!(model.slots[0].note, "Nothing published here yet.");
         let failed = State {
             releases: Some(Err("GitHub answered 500".into())),
@@ -362,7 +375,7 @@ mod tests {
             &velopack("0.1.0"),
             &inferred(),
             &failed,
-            Zoned::now().date(),
+            local_time::now().date(),
         );
         assert_eq!(model.slots[0].note, "Could not read the release feed.");
     }

@@ -20,6 +20,8 @@ use pwrroute_router::{
     Source, Step, Timings,
 };
 
+use crate::local_time;
+
 /// An app a test link can come from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Opener {
@@ -81,7 +83,7 @@ pub const TEST_OPENER: usize = 1;
 fn ago(now: SystemTime, secs: u64) -> SystemTime {
     /// Longer than any offset the fixtures use.
     const SPAN: u64 = 20 * 60;
-    let local_now = Zoned::try_from(now).expect("valid fixture time");
+    let local_now = local_time::at(now).expect("valid fixture time");
     let start = local_day_start(local_now);
     let since_midnight = now
         .duration_since(start)
@@ -106,9 +108,8 @@ fn local_day_start(now: Zoned) -> SystemTime {
     let mut before = today - 2 * 24 * 60 * 60;
     while today - before > 1 {
         let mid = before + (today - before) / 2;
-        let at = Timestamp::from_second(mid)
-            .expect("valid timestamp")
-            .to_zoned(now.time_zone().clone());
+        let timestamp = Timestamp::from_second(mid).expect("valid timestamp");
+        let at = local_time::from_timestamp(timestamp).expect("valid fixture time");
         if at.date() == date {
             today = mid;
         } else {
@@ -980,6 +981,7 @@ pub fn overview_default_only_day() -> Vec<DispatchRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use jiff::{civil::date, tz::TimeZone};
 
     /// The sample rules are the design's: three rewrites and seven handlers,
@@ -995,27 +997,22 @@ mod tests {
 
     #[test]
     fn fixture_times_stay_on_today_right_after_midnight() {
-        let local_now = Zoned::now();
+        let local_now = local_time::now();
         let today = local_now.date();
         let just_after = local_day_start(local_now) + Duration::from_secs(5);
         let offsets = [0, 17, 2 * 60 + 56, 9 * 60 + 28, 18 * 60 + 20];
         let times: Vec<SystemTime> = offsets.iter().map(|&s| ago(just_after, s)).collect();
         for t in &times {
-            assert_eq!(Zoned::try_from(*t).unwrap().date(), today);
+            assert_eq!(local_time::at(*t).unwrap().date(), today);
         }
         assert!(
             times.windows(2).all(|w| w[0] >= w[1]),
             "older offsets stay older"
         );
         // Well into the day the offsets are used as written.
-        let noon = SystemTime::from(
-            TimeZone::system()
-                .to_ambiguous_zoned(today.at(12, 0, 0, 0))
-                .earlier()
-                .unwrap(),
-        );
+        let noon = SystemTime::from(local_time::test_wall_time(today.at(12, 0, 0, 0)));
         assert_eq!(ago(noon, 17), noon - Duration::from_secs(17));
-        assert_eq!(Zoned::try_from(ago(noon, 17)).unwrap().hour(), 11);
+        assert_eq!(local_time::at(ago(noon, 17)).unwrap().hour(), 11);
     }
 
     #[cfg(unix)]
@@ -1071,7 +1068,7 @@ mod tests {
         // Shrunk cases: the day begins at 01:00, with zero elapsed
         // seconds despite the 3600 wall-clock seconds on its face.
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(epoch);
-        let local_now = Zoned::try_from(now).unwrap();
+        let local_now = local_time::at(now).unwrap();
         assert_eq!(local_now.date(), date(y, m, d));
         assert_eq!(local_day_start(local_now), now);
         assert_eq!(ago(now, 1), now);
@@ -1161,8 +1158,8 @@ mod tests {
                 let newer = ago(now, a.min(b));
                 let older = ago(now, a.max(b));
                 prop_assert_eq!(
-                    Zoned::try_from(older).unwrap().date(),
-                    Zoned::try_from(now).unwrap().date()
+                    local_time::at(older).unwrap().date(),
+                    local_time::at(now).unwrap().date()
                 );
                 prop_assert!(now >= newer && newer >= older);
                 Ok(())

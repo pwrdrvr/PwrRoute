@@ -98,7 +98,7 @@ impl Log for Logger {
             return;
         }
         let line = format_line(
-            &jiff::Zoned::now()
+            &crate::local_time::now()
                 .strftime("%Y-%m-%dT%H:%M:%S%.3f%:z")
                 .to_string(),
             record.level(),

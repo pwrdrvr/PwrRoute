@@ -31,9 +31,16 @@ serde_json = { workspace = true }
 # Wakes the GPUI thread when a second launch asks for the window, and
 # carries each dispatch to the Activity feed.
 async-channel = "2"
-# Local clock time for the saved label, and the local calendar day for
-# Activity: the Time column and "today".
-jiff = "0.2"
+# Calendar and clock formatting. Unix reads system zoneinfo, while Windows
+# gets its offsets from Win32, so no bundled time-zone database is needed.
+jiff = { version = "0.2", default-features = false, features = [
+    "std",
+    "tz-system",
+    "tz-fat",
+    "tzdb-zoneinfo",
+    "tzdb-concatenated",
+    "perf-inline",
+] }
 gpui-kit = { version = "=0.8.1", default-features = false, features = ["assets"] }
 # Rasterizes the mark for the tray icon. The same version GPUI draws SVGs with.
 resvg = { version = "0.46", default-features = false }

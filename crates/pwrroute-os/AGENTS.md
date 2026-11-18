@@ -18,14 +18,15 @@ and Windows).
   explicit user action; the OS always gets the last word.
 - **`unsafe` lives in `src/macos/launch_services.rs`,
   `src/macos/app_icon.rs`, `src/macos/window_order.rs`,
-  `src/win/app_icon.rs`, `src/win/awake_time.rs` and
+  `src/win/app_icon.rs`, `src/win/awake_time.rs`, `src/win/local_time.rs` and
   `src/accessibility.rs` only**: the
   LaunchServices C calls, the two AppKit calls that render an icon
   (`CGImageForProposedRect`, the PNG export), the window server's list
   (a typed cast and three CoreGraphics key constants), and on Windows
   the Shell's `IShellItemImageFactory`, COM's per-thread init, GDI's
-  `GetObjectW`/`GetDIBits`, the suspend-excluding interrupt clock and the
-  typed high-contrast query, each with a `SAFETY` comment.
+  `GetObjectW`/`GetDIBits`, the suspend-excluding interrupt clock, the
+  system's local time conversion and the typed high-contrast query, each
+  with a `SAFETY` comment.
   objc2's other Foundation and AppKit bindings are safe;
   prefer them.
 - **`top_window_owner` reads the window server, not AppKit**, so it is

@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{App, SharedString};
-use jiff::{Timestamp, Zoned, tz::TimeZone};
+use jiff::Timestamp;
 use pwrroute_engine::{BindingSource, MachineFile, RulesFile};
 use pwrroute_sync::{ConflictKind, Health, Place, Status, Target, TargetStatus, Wait};
 
@@ -20,6 +20,7 @@ use super::model::{
 };
 use crate::activity_actions::BrowserChoice;
 use crate::destinations::{self, Choice};
+use crate::local_time;
 use crate::overview_model::Installed;
 
 /// What the pane is built from.
@@ -515,11 +516,11 @@ fn when(ms: u64) -> String {
     let Some(at) = i64::try_from(ms)
         .ok()
         .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+        .and_then(local_time::from_timestamp)
     else {
         return String::new();
     };
-    let at = at.to_zoned(TimeZone::system());
-    if at.date() == Zoned::now().date() {
+    if at.date() == local_time::now().date() {
         at.strftime("%H:%M").to_string()
     } else {
         at.strftime("%b %-d %H:%M").to_string()

@@ -27,7 +27,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{local_time::clock, theme::px};
+use crate::{local_time, theme::px};
 use gpui_kit::base::Button;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -494,7 +494,7 @@ pub fn model(
                 Outcome::Failed => ("failed", Status::Error),
             };
             AgentAction {
-                time: clock(record.started).into(),
+                time: local_time::clock(record.started).into(),
                 client: record.agent.clone().into(),
                 call: call.into(),
                 outcome: outcome.into(),
@@ -584,15 +584,11 @@ fn role_model(role: Role) -> AgentRole {
 }
 
 fn day(secs: u64) -> String {
-    use jiff::{Timestamp, tz::TimeZone};
     i64::try_from(secs)
         .ok()
-        .and_then(|secs| Timestamp::from_second(secs).ok())
-        .map(|at| {
-            at.to_zoned(TimeZone::system())
-                .strftime("%Y-%m-%d")
-                .to_string()
-        })
+        .and_then(|secs| jiff::Timestamp::from_second(secs).ok())
+        .and_then(local_time::from_timestamp)
+        .map(|at| at.strftime("%Y-%m-%d").to_string())
         .unwrap_or_default()
 }
 
