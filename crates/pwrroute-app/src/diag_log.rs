@@ -98,8 +98,8 @@ impl Log for Logger {
             return;
         }
         let line = format_line(
-            &chrono::Local::now()
-                .format("%Y-%m-%dT%H:%M:%S%.3f%:z")
+            &crate::local_time::now()
+                .strftime("%Y-%m-%dT%H:%M:%S%.3f%:z")
                 .to_string(),
             record.level(),
             record.target(),

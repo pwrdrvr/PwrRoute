@@ -9,10 +9,7 @@
 //! one is only ever in Try it, which is never written. What reaches
 //! `rules.json` is the pattern, once the rule has a browser.
 
-use std::time::SystemTime;
-
 use crate::theme::px;
-use chrono::{DateTime, Local};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     App, Context, Div, InteractiveElement as _, ParentElement as _, SharedString,
@@ -24,6 +21,7 @@ use pwrroute_router::{DispatchRecord, Outcome};
 use crate::activity::{self, matched_url};
 use crate::app::{PwrRoute, Selection};
 use crate::editor::RailMenu;
+use crate::local_time::clock;
 use crate::rules_model::RowBadge;
 use crate::theme::{self, text, tracked};
 use crate::widgets::{ButtonKind, button, caret, input_box, one_line};
@@ -168,10 +166,6 @@ fn empty_reason(cx: &App) -> &'static str {
     } else {
         "Click a link in any app and it shows up here."
     }
-}
-
-fn clock(at: SystemTime) -> String {
-    DateTime::<Local>::from(at).format("%H:%M").to_string()
 }
 
 /// The patterns a link suggests, narrowest first: the one-pattern

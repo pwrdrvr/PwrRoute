@@ -27,8 +27,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::theme::px;
-use chrono::{DateTime, Local};
+use crate::{local_time, theme::px};
 use gpui_kit::base::Button;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
@@ -495,7 +494,7 @@ pub fn model(
                 Outcome::Failed => ("failed", Status::Error),
             };
             AgentAction {
-                time: clock(record.started).into(),
+                time: local_time::clock(record.started).into(),
                 client: record.agent.clone().into(),
                 call: call.into(),
                 outcome: outcome.into(),
@@ -585,13 +584,12 @@ fn role_model(role: Role) -> AgentRole {
 }
 
 fn day(secs: u64) -> String {
-    DateTime::<Local>::from(UNIX_EPOCH + Duration::from_secs(secs))
-        .format("%Y-%m-%d")
-        .to_string()
-}
-
-fn clock(at: SystemTime) -> String {
-    DateTime::<Local>::from(at).format("%H:%M").to_string()
+    i64::try_from(secs)
+        .ok()
+        .and_then(|secs| jiff::Timestamp::from_second(secs).ok())
+        .and_then(local_time::from_timestamp)
+        .map(|at| at.strftime("%Y-%m-%d").to_string())
+        .unwrap_or_default()
 }
 
 /// "just now", "2 min ago", "3 hours ago", "4 days ago".

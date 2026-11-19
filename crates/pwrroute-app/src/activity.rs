@@ -31,13 +31,13 @@ use std::io;
 use std::time::SystemTime;
 
 use crate::theme::px;
-use chrono::{DateTime, Local, NaiveDate};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, AppContext as _, Context, Div, Entity, Global, InteractiveElement as _,
     IntoElement, KeyDownEvent, ParentElement as _, SharedString, StatefulInteractiveElement as _,
     Styled as _, Subscription, Window, div,
 };
+use jiff::civil::Date;
 use pwrroute_router::{
     DispatchId, DispatchRecord, JournalConfig, JournalStamp, Matched, NotOpenedReason, Options,
     Outcome, Owner, Privacy, RetentionInfo, RouterHandle, Step,
@@ -46,6 +46,7 @@ use pwrroute_router::{
 use crate::app::{PwrRoute, Screen};
 use crate::default_browser::browser_name;
 use crate::fixtures;
+use crate::local_time::{self, clock_with_seconds};
 use crate::rules_view::{card, pane_frame, pane_heading};
 use crate::text_field::{self, Edit, Look, TextField};
 use crate::theme::{self, icon, mono, text, tracked};
@@ -255,7 +256,8 @@ pub struct Feed {
     /// The bound without a router; with one, the router's retention count.
     capacity: usize,
     /// The local day `counts` is for.
-    day: Option<NaiveDate>,
+    day: Option<Date>,
+    latest_counted_at: Option<SystemTime>,
     counts: Counts,
     /// Today's links by the rule that took them and where they opened.
     tally: Tally,
@@ -316,6 +318,7 @@ impl Feed {
             records: Vec::new(),
             capacity: Options::default().retention.count,
             day: None,
+            latest_counted_at: None,
             counts: Counts::default(),
             tally: Tally::default(),
             handle,
@@ -340,16 +343,20 @@ impl Feed {
     /// A dispatch just landed.
     pub fn push(&mut self, record: DispatchRecord) {
         let day = local_day(record.received_at);
-        // Delivery follows I/O completion, so an older local day can arrive
-        // after today's tally. Advance the counted day, never rewind it.
-        if self.day.is_none_or(|current| day > current) {
-            self.day = Some(day);
-            self.counts = Counts::default();
-            self.tally = Tally::default();
-        }
-        if self.day == Some(day) {
-            self.counts.count(&record);
-            self.tally.count(&record);
+        if let Some(day) = day {
+            // Delivery can be out of order. Change the bucket only for a
+            // current receipt. Its date can go backward when the zone changes.
+            let latest = self.latest_counted_at.max(Some(record.received_at));
+            if latest == Some(record.received_at) && self.day != Some(day) {
+                self.day = Some(day);
+                self.counts = Counts::default();
+                self.tally = Tally::default();
+            }
+            if self.day == Some(day) {
+                self.latest_counted_at = latest;
+                self.counts.count(&record);
+                self.tally.count(&record);
+            }
         }
         let index = self.records.partition_point(|other| {
             (other.received_at, other.id) > (record.received_at, record.id)
@@ -460,7 +467,7 @@ impl Feed {
 
     /// Today's counts, by the local calendar; zero once the day has turned.
     pub fn today(&self, now: SystemTime) -> Counts {
-        if self.day == Some(local_day(now)) {
+        if self.day == local_day(now) {
             self.counts
         } else {
             Counts::default()
@@ -470,7 +477,7 @@ impl Feed {
     /// Today's tally by rule and by browser, by the local calendar; empty
     /// once the day has turned. Like the counts, it survives Clear.
     pub fn tally(&self, now: SystemTime) -> Tally {
-        if self.day == Some(local_day(now)) {
+        if self.day == local_day(now) {
             self.tally.clone()
         } else {
             Tally::default()
@@ -533,13 +540,12 @@ pub fn install_feed(feed: Feed, cx: &mut App) -> Entity<Feed> {
     feed
 }
 
-fn local_day(at: SystemTime) -> NaiveDate {
-    DateTime::<Local>::from(at).date_naive()
-}
-
-/// "09:41:08", local time.
-fn clock(at: SystemTime) -> String {
-    DateTime::<Local>::from(at).format("%H:%M:%S").to_string()
+fn local_day(at: SystemTime) -> Option<Date> {
+    // Refresh before choosing or displaying the day's bucket. Jiff's
+    // system-zone cache otherwise keeps the last zone for up to five minutes.
+    #[cfg(not(windows))]
+    jiff::tz::reset_system_time_zone_cache();
+    local_time::at(at).map(|at| at.date())
 }
 
 /// Which row: a dispatch's id, and whether it came from the journal. Ids
@@ -777,7 +783,7 @@ impl ActivityRow {
                 id: record.id,
                 journaled,
             },
-            time: clock(record.received_at).into(),
+            time: clock_with_seconds(record.received_at).into(),
             url: received.into(),
             from: from.into(),
             rule: rule_label(&record.steps).into(),
@@ -3384,6 +3390,56 @@ mod tests {
         completion
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn feed_buckets_new_dispatches_in_the_current_system_zone() {
+        const TEST: &str =
+            "activity::tests::feed_buckets_new_dispatches_in_the_current_system_zone";
+        const CHILD: &str = "PWRROUTE_ACTIVITY_TZ_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let localtime = dir.path().join("localtime");
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", TEST, "--nocapture"])
+                .env("TZ", &localtime)
+                .env(CHILD, &localtime)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr),
+            );
+            return;
+        }
+
+        // Both zone changes cross midnight while the process stays up.
+        let localtime = std::env::var_os(CHILD).unwrap();
+        let mut feed = Feed::new(None);
+        let start: SystemTime = "2026-11-18T20:00:00Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+            .into();
+        for (second, zone, day, total) in [
+            (0, "UTC", 18, 1),
+            (1, "Asia/Tokyo", 19, 1),
+            (2, "Asia/Tokyo", 19, 2),
+            (3, "UTC", 18, 1),
+            (4, "UTC", 18, 2),
+        ] {
+            std::fs::copy(
+                std::path::Path::new("/usr/share/zoneinfo").join(zone),
+                &localtime,
+            )
+            .unwrap();
+            let at = start + Duration::from_secs(second);
+            feed.push(feed_completion(second, at, Privacy::None));
+            assert_eq!(feed.day, Some(jiff::civil::date(2026, 11, day)), "{zone}");
+            assert_eq!(feed.today(at).routed, total, "{zone}");
+        }
+    }
+
     #[test]
     fn feed_out_of_order_completion_keeps_the_newer_receipt_at_capacity_one() {
         let at = SystemTime::UNIX_EPOCH + Duration::from_secs(1_600_000_000);
@@ -3436,7 +3492,7 @@ mod tests {
         let counts = feed.today(at);
         let tally = feed.tally(at);
         feed.push(feed_completion(2, earlier_day, Privacy::Host));
-        assert_eq!(feed.day, Some(local_day(at)));
+        assert_eq!(feed.day, local_day(at));
         assert_eq!(feed.today(at), counts);
         assert_eq!(feed.tally(at), tally);
         assert_eq!(
