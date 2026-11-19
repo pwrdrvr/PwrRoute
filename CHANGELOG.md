@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.19.0 - 2026-11-19
+
+- Updates after sleep - Automatic update checks use wall-clock deadlines, so sleeping through the six-hour check interval no longer requires another six hours of awake time. After waking with an overdue check, PwrRoute allows 30 seconds to settle and runs one check without replaying every missed interval. Startup checks and the regular six-hour cadence remain in place.
+- Network recovery - Failed connections and interrupted update downloads retry after 30 seconds, with exponential backoff capped at six hours. On macOS, observing connectivity return can bring that retry forward after 30 seconds without an observed disconnect. GitHub rate limits, invalid release data and package or filesystem errors keep the ordinary cadence instead of starting short network retries.
+- MCP service - Updated the MCP SDK to address its response-body buffering advisory, alongside routine dependency and third-party notice updates.
+- Local time - Activity dates, Settings timestamps and diagnostic logs now use Jiff in place of the app's direct Chrono dependency. Existing clock formats are preserved, including daylight-saving transitions and fractional UTC offsets; Windows local time follows the operating system's timezone rules.
+
 ## v0.18.0 - 2026-11-05
 
 - Rule suggestions - Suggested patterns now match the links they were created for when paths contain carets, empty segments, trailing backslashes or unusual scheme and authority combinations. Pattern construction follows Finicky's URL encoding and wildcard behavior, including empty usernames with passwords and custom-scheme links.
