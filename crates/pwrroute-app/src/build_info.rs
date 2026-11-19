@@ -179,7 +179,7 @@ impl BuildInfo {
         let when = self
             .commit_time
             .and_then(local)
-            .map(|time| format!("committed {}", time.format("%b %-d %H:%M")));
+            .map(|time| format!("committed {}", time.strftime("%b %-d %H:%M")));
         match (subject, when) {
             (Some(subject), Some(when)) => Some(format!("{subject} \u{00b7} {when}")),
             (one, other) => one.or(other),
@@ -194,7 +194,7 @@ impl BuildInfo {
         Some(match self.built_at.and_then(local) {
             Some(time) => format!(
                 "Built {} with uncommitted changes, so it is more than this commit.",
-                time.format("%b %-d at %H:%M")
+                time.strftime("%b %-d at %H:%M")
             ),
             None => "Built with uncommitted changes, so it is more than this commit.".to_owned(),
         })
@@ -235,7 +235,7 @@ impl BuildInfo {
             lines.push(format!("{PAD}{subject}"));
         }
         if let Some(built) = self.built_at.and_then(local) {
-            lines.push(format!("Built:    {}", built.format("%Y-%m-%d %H:%M")));
+            lines.push(format!("Built:    {}", built.strftime("%Y-%m-%d %H:%M")));
         }
         let mut report = lines.join("\n");
         report.push('\n');
@@ -243,8 +243,8 @@ impl BuildInfo {
     }
 }
 
-fn local(seconds: i64) -> Option<chrono::DateTime<chrono::Local>> {
-    chrono::DateTime::from_timestamp(seconds, 0).map(|time| time.with_timezone(&chrono::Local))
+fn local(seconds: i64) -> Option<jiff::Zoned> {
+    crate::local_time::from_timestamp(jiff::Timestamp::from_second(seconds).ok()?)
 }
 
 #[cfg(test)]

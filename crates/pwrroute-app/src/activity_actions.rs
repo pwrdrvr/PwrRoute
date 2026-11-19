@@ -28,7 +28,6 @@
 use std::time::SystemTime;
 
 use crate::theme::px;
-use chrono::{DateTime, Local};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{
     AnyElement, App, Context, Div, ElementId, HighlightStyle, InteractiveElement as _, IntoElement,
@@ -46,6 +45,7 @@ use pwrroute_router::{
 use crate::activity::{self, RowKey, matched_url};
 use crate::app::{PwrRoute, Selection};
 use crate::destinations::{self, Choice};
+use crate::local_time::clock_with_seconds;
 use crate::rules_model::KEEP_LEVELS;
 use crate::rules_store::Status;
 use crate::text_field::{Edit, TextField};
@@ -281,7 +281,7 @@ impl AddRule {
             },
             from_where: SheetFrom::Activity,
             waiting: false,
-            time: clock(record.received_at),
+            time: clock_with_seconds(record.received_at),
             url,
             from: record.link.opener.clone().filter(|o| !o.name.is_empty()),
             opener: engine_opener(record),
@@ -783,11 +783,6 @@ fn matched(record: &DispatchRecord) -> Option<Matched> {
         Step::Matched { by } => Some(*by),
         _ => None,
     })
-}
-
-/// "09:40:51", local time.
-fn clock(at: SystemTime) -> String {
-    DateTime::<Local>::from(at).format("%H:%M:%S").to_string()
 }
 
 /// "Google Chrome · Personal", or the browser alone.
@@ -1396,7 +1391,7 @@ impl PwrRoute {
                                     .zip(recent)
                                     .filter(|(_, hit)| **hit)
                                     .map(|(r, _)| Collision {
-                                        time: clock(r.received_at),
+                                        time: clock_with_seconds(r.received_at),
                                         url: matched_url(r).to_owned(),
                                         opened: opened_label(r),
                                         took: Took::of(r),

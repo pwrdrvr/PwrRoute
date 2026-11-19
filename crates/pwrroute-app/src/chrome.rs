@@ -645,7 +645,8 @@ fn changed_actions(cx: &mut Context<'_, PwrRoute>) -> Div {
 /// when it was saved. Anything the store has to say about an edit
 /// (unsaved, saving, a failed save, a change on disk) wins.
 pub fn foot_label(app: &PwrRoute, status: &Status) -> String {
-    use crate::rules_store::{Status as Store, clock};
+    use crate::local_time::clock;
+    use crate::rules_store::Status as Store;
     match (app.store.status(), &app.config) {
         (Store::Saved { .. }, Some(config))
             if config.problem.is_none() && status.config_error.is_none() =>

@@ -545,7 +545,7 @@ impl LogsWindow {
 
     /// Drops the mark after the newest line, labelled with the time.
     pub fn mark(&mut self, cx: &mut Context<'_, Self>) {
-        let now = chrono::Local::now().format("%H:%M:%S").to_string();
+        let now = crate::local_time::clock_with_seconds(std::time::SystemTime::now());
         self.view.set_mark(now);
         self.sync_list();
         cx.notify();

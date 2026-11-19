@@ -213,6 +213,10 @@ signing secrets are documented in `.github/workflows/README.md`.
 - **Progressive disclosure — short and close.** Put guidance in the smallest
   scope that needs it: a nested `AGENTS.md` beside the code it governs, not one
   giant root file.
+- **Keep this file under 24 KiB** (`node scripts/check-agent-instructions-size.mjs`,
+  run by `cargo xtask lint` and CI's classifier). Codex silently drops
+  AGENTS.md text past 32 KiB; move detail into a linked doc and leave a line
+  here saying when to read it.
 - **Always symlink `CLAUDE.md → AGENTS.md`.** Whenever you add an `AGENTS.md`,
   create a sibling `CLAUDE.md` symlink to it (`ln -s AGENTS.md CLAUDE.md`) so
   both toolchains read one source of truth.

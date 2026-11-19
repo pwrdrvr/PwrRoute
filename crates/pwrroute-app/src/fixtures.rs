@@ -13,11 +13,14 @@
 
 use std::time::{Duration, SystemTime};
 
+use jiff::{Timestamp, Zoned};
 use pwrroute_engine::RulesFile;
 use pwrroute_router::{
     AppType, Browser, DispatchId, DispatchRecord, Link, Matched, OpenerInfo, Outcome, Privacy,
     Source, Step, Timings,
 };
+
+use crate::local_time;
 
 /// An app a test link can come from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -80,7 +83,7 @@ pub const TEST_OPENER: usize = 1;
 fn ago(now: SystemTime, secs: u64) -> SystemTime {
     /// Longer than any offset the fixtures use.
     const SPAN: u64 = 20 * 60;
-    let local_now = chrono::DateTime::<chrono::Local>::from(now);
+    let local_now = local_time::at(now).expect("valid fixture time");
     let start = local_day_start(local_now);
     let since_midnight = now
         .duration_since(start)
@@ -96,29 +99,24 @@ fn ago(now: SystemTime, secs: u64) -> SystemTime {
 
 /// The first real instant of now's local date. Midnight may repeat or not
 /// exist: a few zones start DST at 00:00, so that day begins at 01:00.
-fn local_day_start(now: chrono::DateTime<chrono::Local>) -> SystemTime {
-    use chrono::TimeZone;
-    let date = now.date_naive();
+fn local_day_start(now: Zoned) -> SystemTime {
+    let date = now.date();
     // Search real seconds rather than constructing local midnight:
-    // Local may normalize a nonexistent midnight using the old offset.
+    // A missing midnight can resolve to a later time than the actual start.
     // The previous 48h brackets even a long local day.
-    let mut before = now.timestamp() - 2 * 24 * 60 * 60;
-    let mut today = now.timestamp();
+    let mut today = now.timestamp().as_second();
+    let mut before = today - 2 * 24 * 60 * 60;
     while today - before > 1 {
         let mid = before + (today - before) / 2;
-        let at = chrono::Local
-            .timestamp_opt(mid, 0)
-            .single()
-            .expect("valid timestamp");
-        if at.date_naive() == date {
+        let timestamp = Timestamp::from_second(mid).expect("valid timestamp");
+        let at = local_time::from_timestamp(timestamp).expect("valid fixture time");
+        if at.date() == date {
             today = mid;
         } else {
             before = mid;
         }
     }
-    chrono::Local
-        .timestamp_opt(today, 0)
-        .single()
+    Timestamp::from_second(today)
         .expect("day start exists")
         .into()
 }
@@ -983,7 +981,8 @@ pub fn overview_default_only_day() -> Vec<DispatchRecord> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Local, TimeZone, Timelike};
+    #[cfg(unix)]
+    use jiff::{civil::date, tz::TimeZone};
 
     /// The sample rules are the design's: three rewrites and seven handlers,
     /// one of them off.
@@ -998,27 +997,22 @@ mod tests {
 
     #[test]
     fn fixture_times_stay_on_today_right_after_midnight() {
-        let local_now = Local::now();
-        let today = local_now.date_naive();
+        let local_now = local_time::now();
+        let today = local_now.date();
         let just_after = local_day_start(local_now) + Duration::from_secs(5);
         let offsets = [0, 17, 2 * 60 + 56, 9 * 60 + 28, 18 * 60 + 20];
         let times: Vec<SystemTime> = offsets.iter().map(|&s| ago(just_after, s)).collect();
         for t in &times {
-            assert_eq!(chrono::DateTime::<Local>::from(*t).date_naive(), today);
+            assert_eq!(local_time::at(*t).unwrap().date(), today);
         }
         assert!(
             times.windows(2).all(|w| w[0] >= w[1]),
             "older offsets stay older"
         );
         // Well into the day the offsets are used as written.
-        let noon = SystemTime::from(
-            Local
-                .from_local_datetime(&today.and_hms_opt(12, 0, 0).unwrap())
-                .earliest()
-                .unwrap(),
-        );
+        let noon = SystemTime::from(local_time::test_wall_time(today.at(12, 0, 0, 0)));
         assert_eq!(ago(noon, 17), noon - Duration::from_secs(17));
-        assert_eq!(chrono::DateTime::<Local>::from(ago(noon, 17)).hour(), 11);
+        assert_eq!(local_time::at(ago(noon, 17)).unwrap().hour(), 11);
     }
 
     #[cfg(unix)]
@@ -1066,7 +1060,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn first_instant_regression(test: &str, zone: &str, epoch: u64, (y, m, d): (i32, u32, u32)) {
+    fn first_instant_regression(test: &str, zone: &str, epoch: u64, (y, m, d): (i16, i8, i8)) {
         if std::env::var_os("PWRROUTE_FIXTURE_TZ_CHILD").is_none() {
             in_zone(test, zone);
             return;
@@ -1074,9 +1068,9 @@ mod tests {
         // Shrunk cases: the day begins at 01:00, with zero elapsed
         // seconds despite the 3600 wall-clock seconds on its face.
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(epoch);
-        let date = chrono::NaiveDate::from_ymd_opt(y, m, d).unwrap();
-        assert_eq!(chrono::DateTime::<Local>::from(now).date_naive(), date);
-        assert_eq!(local_day_start(now.into()), now);
+        let local_now = local_time::at(now).unwrap();
+        assert_eq!(local_now.date(), date(y, m, d));
+        assert_eq!(local_day_start(local_now), now);
         assert_eq!(ago(now, 1), now);
         assert_eq!(
             ago(now + Duration::from_secs(5), 1200),
@@ -1084,9 +1078,8 @@ mod tests {
         );
     }
 
-    // Unix Local uses TZ; Windows Local uses the OS timezone API and
-    // cannot be overridden this way. Each Unix zone gets a fresh process
-    // instead of mutating TZ underneath other concurrent tests.
+    // Each Unix zone gets a fresh process so it can set TZ without
+    // changing the time zone of other concurrent tests.
     #[cfg(unix)]
     fn in_zone(test: &str, zone: &str) {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1126,25 +1119,24 @@ mod tests {
         }
         let mut starts = Vec::new();
         let mut gaps = Vec::new();
-        let first = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
-        for d in 0..730 {
-            let date = first + chrono::Days::new(d);
+        let zone = TimeZone::system();
+        let mut day = date(2026, 1, 1);
+        for _ in 0..730 {
             // Independent generator: walk local minutes to the first valid
             // one. This includes dates whose 00:00 never happened.
             let start = (0..1440)
                 .find_map(|m| {
-                    let wall = date.and_hms_opt(m / 60, m % 60, 0).unwrap();
-                    let candidate = Local.from_local_datetime(&wall).earliest()?;
-                    // Some Local implementations normalize missing times.
-                    // Only accept a minute that round-trips to the same wall time.
-                    let actual = chrono::DateTime::<Local>::from(SystemTime::from(candidate));
-                    (actual.naive_local() == wall).then_some(actual)
+                    let wall = day.at((m / 60) as i8, (m % 60) as i8, 0, 0);
+                    let candidate = zone.to_ambiguous_zoned(wall).earlier().ok()?;
+                    // The earliest resolution of a missing time shifts it.
+                    (candidate.datetime() == wall).then_some(candidate)
                 })
                 .unwrap();
             if start.hour() != 0 {
-                gaps.push(SystemTime::from(start));
+                gaps.push(SystemTime::from(&start));
             }
             starts.push(SystemTime::from(start));
+            day = day.tomorrow().unwrap();
         }
         let boundary = (prop::sample::select(starts), 0u64..=1200)
             .prop_map(|(start, elapsed)| start + Duration::from_secs(elapsed));
@@ -1166,8 +1158,8 @@ mod tests {
                 let newer = ago(now, a.min(b));
                 let older = ago(now, a.max(b));
                 prop_assert_eq!(
-                    chrono::DateTime::<Local>::from(older).date_naive(),
-                    chrono::DateTime::<Local>::from(now).date_naive()
+                    local_time::at(older).unwrap().date(),
+                    local_time::at(now).unwrap().date()
                 );
                 prop_assert!(now >= newer && newer >= older);
                 Ok(())

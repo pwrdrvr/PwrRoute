@@ -40,8 +40,9 @@ use crate::config_view::display_path;
 use crate::importer::{
     Charge, ImportModel, Item, Kind, Label, Placement, SourceChoice, Step, same_file,
 };
+use crate::local_time::clock;
 use crate::menu_bar::MenuBar;
-use crate::rules_store::{RulesStore, clock};
+use crate::rules_store::RulesStore;
 use crate::rules_view::{RowState, card, rule_row};
 use crate::settings_store::{self, SourceSettings};
 use crate::theme::{self, mono, text, tracked};

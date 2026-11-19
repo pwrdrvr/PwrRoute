@@ -31,7 +31,8 @@
 //! (the LaunchServices calls), `macos::app_icon` (two AppKit calls),
 //! `macos::window_order` (the window server's list) and `win::app_icon`
 //! (the Shell's icon and GDI's pixels), `win::awake_time` (the unbiased
-//! interrupt clock) and `accessibility` (native preference queries).
+//! interrupt clock), `win::local_time` (local clock conversion) and
+//! `accessibility` (native preference queries).
 
 pub mod accessibility;
 mod args;
@@ -54,6 +55,8 @@ pub use registration::{
 };
 // Plans the platform code applies, public so they can be checked anywhere.
 pub use registration::{RegistryValue, desktop_entry, windows_registry_values};
+#[cfg(windows)]
+pub use win::local_utc_offset;
 
 use std::path::{Path, PathBuf};
 

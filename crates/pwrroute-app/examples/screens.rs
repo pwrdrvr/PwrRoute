@@ -122,6 +122,10 @@ mod importer;
 #[cfg(target_os = "macos")]
 #[path = "../src/importer_view.rs"]
 mod importer_view;
+
+#[cfg(target_os = "macos")]
+#[path = "../src/local_time.rs"]
+mod local_time;
 #[cfg(target_os = "macos")]
 #[path = "../src/macos.rs"]
 mod macos;
