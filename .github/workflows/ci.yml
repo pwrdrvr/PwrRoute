@@ -50,6 +50,21 @@ jobs:
       code_impacting: ${{ steps.classify.outcome != 'success' || steps.classify.outputs.code_impacting != 'false' }}
       packaging_impacting: ${{ steps.classify.outcome != 'success' || steps.classify.outputs.packaging_impacting != 'false' }}
     steps:
+      # Docs-only PRs skip Typecheck, so the instruction-size guard runs here,
+      # where every PR and push passes through. When it fails, this job fails
+      # and Typecheck runs anyway (see its `if:`), repeating the check through
+      # `cargo xtask lint`, so a required check turns red.
+      - name: Checkout agent instructions
+        uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            AGENTS.md
+            scripts/check-agent-instructions-size.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Check root AGENTS.md size
+        run: node ./scripts/check-agent-instructions-size.mjs
+
       - name: Classify changed files
         id: classify
         # A script/runtime failure must select full CI, too.
