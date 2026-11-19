@@ -72,6 +72,7 @@ fn lint() -> Result<()> {
         "scripts/ci/classify-changes.test.cjs",
         "scripts/ci/macos-workflows.test.cjs",
         "scripts/ci/windows-workflows.test.cjs",
+        "scripts/check-agent-instructions-size.test.mjs",
     ]);
     // Start's subprocess mocks require Bash and POSIX executable permissions.
     if cfg!(unix) {
@@ -79,6 +80,9 @@ fn lint() -> Result<()> {
     }
     run(node.current_dir(root()))
         .context("Node.js is required to run the repository's JavaScript tests")?;
+    run(Command::new("node")
+        .arg("scripts/check-agent-instructions-size.mjs")
+        .current_dir(root()))?;
     if cfg!(unix) {
         run(Command::new("python3")
             .args([
